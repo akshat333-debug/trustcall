@@ -8,8 +8,8 @@ model:
   num_classes: 2
 
 data:
-  root_dir: "./data"     # Loader expects root_dir/KAGGLE/AUDIO/...
-  dataset_type: "deepvoice" # Custom flag to ensure we use the right loader if needed
+  root_dir: "./data"
+  dataset_type: "deepvoice"
   features: "logmel"
   sample_rate: 16000
   n_fft: 1024
@@ -19,7 +19,7 @@ data:
   freq_mask_param: 20
   apply_spec_augment: true
   chunk_len_sec: 4
-  chunk_stride_sec: 2.0 # 50% overlap for more data
+  chunk_stride_sec: 2.0
 
 training:
   batch_size: 32
@@ -27,10 +27,11 @@ training:
   learning_rate: 0.0001
   optimizer: "adam"
   weight_decay: 1e-4
-  device: "cpu" # Force CPU for compatibility on Mac
-  output_dir: "./outputs/deepvoice_run"
+  device: "cpu"
+  output_dir: "./outputs/deepvoice_weighted"
   early_stopping_patience: 5
   log_interval: 10
+  class_weights: [2.0, 7.0]
 
 fuzzy:
   compute_on_loader: false

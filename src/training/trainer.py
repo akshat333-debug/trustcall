@@ -16,7 +16,14 @@ class Trainer:
         self.model = model.to(self.device)
         self.logger = setup_logger(f"Trainer_{config['model']['name']}", log_dir=config['training']['output_dir'])
         
-        self.criterion = nn.CrossEntropyLoss() # or BCEWithLogitsLoss if output is 1 dim
+        # Check for class weights
+        class_weights = config['training'].get('class_weights', None)
+        if class_weights:
+            weights = torch.tensor(class_weights, dtype=torch.float32).to(self.device)
+            self.criterion = nn.CrossEntropyLoss(weight=weights)
+        else:
+            self.criterion = nn.CrossEntropyLoss()
+        
         # Our models output (B, 2), so CrossEntropy is good.
         
         self.optimizer = optim.Adam(

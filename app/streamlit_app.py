@@ -27,8 +27,8 @@ st.markdown("### Advanced Audio Deepfake Detection with Explainable AI (Neuro-Fu
 
 # Sidebar
 st.sidebar.header("Configuration")
-default_model = os.path.join(PROJECT_ROOT, "outputs/deepvoice_proposed/best_model.pth")
-default_config = os.path.join(PROJECT_ROOT, "configs/deepvoice.yaml")
+default_model = os.path.join(PROJECT_ROOT, "outputs/deepvoice_weighted/best_model.pth")
+default_config = os.path.join(PROJECT_ROOT, "configs/deepvoice_weighted_v2.yaml")
 model_path = st.sidebar.text_input("Model Checkpoint Path", default_model)
 config_path = st.sidebar.text_input("Config Path", default_config)
 threshold = st.sidebar.slider("Detection Threshold", 0.0, 1.0, 0.5)
