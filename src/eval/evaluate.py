@@ -5,6 +5,7 @@ import os
 import numpy as np
 from torch.utils.data import DataLoader
 from src.data.asvspoof_dataset import ASVspoofDataset
+from src.data.deepvoice_dataset import DeepVoiceDataset
 from src.models.resnet_bilstm import ResNetBiLSTM
 from src.models.baseline_cnn import BaselineCNN
 from src.eval.metrics import compute_metrics
@@ -35,8 +36,14 @@ def main():
         
     seed_everything(42)
     
-    # Dataset
-    ds = ASVspoofDataset(config, subset=args.subset)
+    # Dataset selection
+    dataset_type = config.get('data', {}).get('dataset_type', 'asvspoof')
+    if dataset_type == 'deepvoice':
+        print(f"Using DeepVoiceDataset ({args.subset})...")
+        ds = DeepVoiceDataset(config, subset=args.subset)
+    else:
+        ds = ASVspoofDataset(config, subset=args.subset)
+        
     loader = DataLoader(ds, batch_size=1, shuffle=False)
     
     model = load_model(config['model']['name'], config, args.model_path)

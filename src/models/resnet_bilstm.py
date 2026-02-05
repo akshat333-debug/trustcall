@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models import resnet18
+from src.models.anfis_fuzzy import NeuroFuzzyLayer
 
 class ResNetBiLSTM(nn.Module):
     def __init__(self, config):
@@ -33,6 +34,16 @@ class ResNetBiLSTM(nn.Module):
         
         self.fc = nn.Linear(hidden_size * 2, num_classes)
         self.dropout = nn.Dropout(config['model']['dropout'])
+        
+        # Neuro-Fuzzy Novelty
+        self.use_fuzzy = config['model'].get('use_fuzzy', False)
+        if self.use_fuzzy:
+            # Semantic Bottleneck: Map Bidirectional LSTM (256) -> 3 Features
+            # 1. Spoofiness (0..1)
+            # 2. Artifact Presence (0..1)
+            # 3. Prosody Stability (0..1)
+            self.bottleneck = nn.Linear(hidden_size * 2, 3)
+            self.fuzzy = NeuroFuzzyLayer(config)
 
     def forward(self, x):
         # x: (batch, n_mels, time)
@@ -61,6 +72,34 @@ class ResNetBiLSTM(nn.Module):
         combined = (avg_pool + max_pool) / 2
         
         out = self.dropout(combined)
+        
+        if self.use_fuzzy:
+            # 1. Semantic Bottleneck
+            # Sigmoid to ensure 0..1 range for fuzzy membership functions
+            semantic_feats = torch.sigmoid(self.bottleneck(out)) 
+            
+            # 2. Fuzzy Inference
+            # Returns risk_score (B, 1) or (B)
+            risk_score, _, _ = self.fuzzy(semantic_feats)
+            
+            if risk_score.dim() == 1:
+                risk_score = risk_score.unsqueeze(1)
+            
+            # 3. Convert absolute Risk Score (0..1) to Logits
+            # We treat Risk as P(Fake).
+            # So P(Real) = 1 - Risk.
+            # We enable gradients to flow through this risk score back to the bottleneck.
+            eps = 1e-6
+            risk_score = torch.clamp(risk_score, eps, 1.0 - eps)
+            
+            logit_real = torch.log(1.0 - risk_score)
+            logit_fake = torch.log(risk_score)
+            
+            # Combine to (B, 2)
+            logit = torch.cat([logit_real, logit_fake], dim=1)
+            
+            return logit
+        
         logit = self.fc(out)
         
         return logit
