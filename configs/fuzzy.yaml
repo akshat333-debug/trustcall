@@ -1,0 +1,27 @@
+fuzzy:
+  input_vars:
+    spoof_score:
+      range: [0, 1]
+      mf_names: ["low", "medium", "high"]
+    artifact_score:
+      range: [0, 1]
+      mf_names: ["low", "medium", "high"]
+    prosody_stability:
+      range: [0, 1]
+      mf_names: ["low", "medium", "high"]
+  
+  output_var:
+    risk:
+      range: [0, 1]
+      mf_names: ["low", "medium", "high"]
+  
+  rules_mode: "mamdani" # or sugeno
+  num_rules: 12
+  
+  # Parameters for artifact/prosody extraction
+  features:
+    artifact_thresholds:
+      flatness: 0.5
+      centroid_variance: 1000
+    prosody_thresholds:
+      f0_var: 50

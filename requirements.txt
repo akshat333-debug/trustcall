@@ -1,0 +1,16 @@
+torch
+numpy
+pandas
+scikit-learn
+librosa
+soundfile
+matplotlib
+seaborn
+tqdm
+pyyaml
+optuna
+streamlit
+plotly
+scipy
+pytest
+requests

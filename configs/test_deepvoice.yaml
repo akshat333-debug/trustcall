@@ -1,0 +1,38 @@
+model:
+  name: "resnet_bilstm"
+  backbone: "resnet18"
+  lstm_hidden_size: 64
+  lstm_layers: 1
+  dropout: 0.1
+  embedding_dim: 64
+  num_classes: 2
+
+data:
+  root_dir: "./data/asvspoof2019"
+  track: "LA"
+  features: "logmel"
+  sample_rate: 16000
+  n_fft: 1024
+  hop_length: 256
+  n_mels: 80
+  time_mask_param: 40
+  freq_mask_param: 20
+  apply_spec_augment: false
+  chunk_len_sec: 4
+
+training:
+  batch_size: 4
+  epochs: 1
+  learning_rate: 0.0001
+  optimizer: "adam"
+  weight_decay: 1e-4
+  device: "cpu" # Force CPU for dry run to avoid CUDA issues if not present
+  output_dir: "./outputs/test_run"
+  early_stopping_patience: 1
+  log_interval: 1
+  
+fuzzy:
+  compute_on_loader: true # Test fuzzy logic path
+
+optuna:
+  n_trials: 1
