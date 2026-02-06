@@ -53,6 +53,7 @@ class NeuroFuzzyLayer(nn.Module):
         self.consequents = nn.Parameter(torch.rand(self.num_rules))
         
     def gaussian(self, x, mu, sigma):
+        sigma = torch.clamp(torch.abs(sigma), min=1e-5)
         return torch.exp(-0.5 * ((x - mu) / (sigma ** 2)))
 
     def forward(self, x):

@@ -1,0 +1,38 @@
+model:
+  name: "resnet_bilstm"
+  backbone: "resnet18"
+  lstm_hidden_size: 128
+  lstm_layers: 2
+  dropout: 0.4 # Higher dropout for robustness
+  embedding_dim: 128
+  num_classes: 2
+  use_fuzzy: true
+
+data:
+  root_dir: "./data"
+  dataset_type: "asvspoof" # Ensure dataset code uses this
+  features: "logmel"
+  sample_rate: 16000
+  n_fft: 1024
+  hop_length: 256
+  n_mels: 80
+  time_mask_param: 40
+  freq_mask_param: 20
+  apply_spec_augment: true
+  chunk_len_sec: 4
+  augment: true # Enable the new augmentation logic
+
+training:
+  batch_size: 32
+  epochs: 5 # Short fine-tuning
+  learning_rate: 0.00001 # Reduced to 1e-5 for stability
+  optimizer: "adam"
+  weight_decay: 1e-3 # Higher decay
+  device: "mps" # Automatic selection in code usually, but good to note
+  output_dir: "./outputs/robust_finetune"
+  early_stopping_patience: 3
+  log_interval: 10
+  class_weights: [2.0, 7.0] # Maintain weight for unbalanced data
+
+fuzzy:
+  compute_on_loader: false

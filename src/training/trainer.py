@@ -49,6 +49,10 @@ class Trainer:
             outputs = self.model(features)
             loss = self.criterion(outputs, labels)
             loss.backward()
+            
+            # Gradient Clipping to prevent NaN
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            
             self.optimizer.step()
             
             total_loss += loss.item()
