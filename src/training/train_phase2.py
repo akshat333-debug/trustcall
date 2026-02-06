@@ -37,6 +37,12 @@ def main():
     
     # 4. Model
     model = ResNetBiLSTM(config).to(device)
+
+    # Resume from checkpoint if exists (Logic added for Phase 2 continuity)
+    checkpoint_path = os.path.join(config['training']['output_dir'], "best_model.pth")
+    if os.path.exists(checkpoint_path):
+        print(f"Resuming from checkpoint: {checkpoint_path}")
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     
     # 6. Trainer
     trainer = Trainer(model, config, device)
