@@ -103,3 +103,37 @@ class ResNetBiLSTM(nn.Module):
         logit = self.fc(out)
         
         return logit
+
+    def forward_explain(self, x):
+        """Returns logits + fuzzy internals for XAI"""
+        if x.dim() == 3:
+            x = x.unsqueeze(1)
+        
+        # 1. Backbone
+        features = self.resnet_features(x)
+        features = torch.mean(features, dim=2).permute(0, 2, 1) # Pool -> (B, T, 512)
+        
+        self.lstm.flatten_parameters()
+        lstm_out, _ = self.lstm(features)
+        
+        avg_pool = torch.mean(lstm_out, dim=1)
+        max_pool, _ = torch.max(lstm_out, dim=1)
+        out = self.dropout((avg_pool + max_pool) / 2)
+        
+        if self.use_fuzzy:
+            # Re-run fuzzy logic internals
+            semantic_feats = torch.sigmoid(self.bottleneck(out)) 
+            risk_score, firing_strengths, memberships = self.fuzzy(semantic_feats)
+            
+            # Recalculate logits directly
+            eps = 1e-6
+            risk_clamped = torch.clamp(risk_score, eps, 1.0 - eps)
+            if risk_clamped.dim() == 1: risk_clamped = risk_clamped.unsqueeze(1)
+            
+            logit_real = torch.log(1.0 - risk_clamped)
+            logit_fake = torch.log(risk_clamped)
+            logits = torch.cat([logit_real, logit_fake], dim=1)
+            
+            return logits, risk_clamped, firing_strengths, semantic_feats
+            
+        return self.fc(out), None, None, None

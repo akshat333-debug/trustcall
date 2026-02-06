@@ -91,17 +91,15 @@ def load_system(config_file, checkpoint):
         st.warning(f"Checkpoint not found at {checkpoint}. Using initialized weights (Random).")
     model.eval()
     
-    # Fuzzy Layer
-    fuzzy = NeuroFuzzyLayer(config)
-    fuzzy.eval()
+    # Fuzzy Layer logic is inside the model now
     
     scorer = ArtifactProsodyScorer(config)
     extractor = LibrosaFeatureExtractor(config)
     
-    return model, fuzzy, scorer, extractor, config
+    return model, scorer, extractor, config
 
 try:
-    model, fuzzy, scorer, extractor, config = load_system(config_path, model_path)
+    model, scorer, extractor, config = load_system(config_path, model_path)
     st.sidebar.success("System Loaded")
 except Exception as e:
     st.sidebar.error(f"Failed to load system: {e}")
@@ -145,21 +143,33 @@ with tab1:
         try:
             with st.spinner("Running model inference..."):
                 with torch.no_grad():
-                    logits = model(features.unsqueeze(0))  # Add batch dim
-                    prob_bonafide = torch.softmax(logits, dim=1)[0, 1].item()
-                    prob_spoof = 1.0 - prob_bonafide
+                    # Use the new explain method
+                    # semantic_feats: [Spoofness, Artifact, Prosody]
+                    logits, risk_score, firing_strengths, semantic_feats = model.forward_explain(features.unsqueeze(0))
                     
-                # Artifact/Prosody Scores
+                    if risk_score is not None:
+                        prob_spoof = risk_score.item()
+                        # Extract learned semantic features
+                        learned_feats = semantic_feats[0].cpu().numpy()
+                        # Feature 0: Abstract Spoofiness, 1: Artifact, 2: Prosody Instability
+                        feat_spoofness = learned_feats[0]
+                        feat_artifact = learned_feats[1]
+                        feat_prosody = learned_feats[2]
+                    else:
+                        # Fallback for non-fuzzy model
+                        prob_bonafide = torch.softmax(logits, dim=1)[0, 1].item()
+                        prob_spoof = 1.0 - prob_bonafide
+                        feat_artifact = 0.0
+                        feat_prosody = 0.0
+                
+                # We still compute raw external scores for comparison/display if needed, 
+                # but the model used its own internal learned ones.
                 raw_art = compute_artifact_scores(waveform_np, sr)
                 raw_pros = compute_prosody_scores(waveform_np, sr)
-                
-                score_art = scorer.normalize_artifact(raw_art)
-                score_pros = scorer.normalize_prosody(raw_pros)
-                
-                # Fuzzy Inference
-                fuzzy_input = torch.tensor([[prob_spoof, score_art, score_pros]])
-                risk_score, firing_strengths, memberships = fuzzy(fuzzy_input)
-                risk_val = risk_score.item()
+                score_art_ext = scorer.normalize_artifact(raw_art)
+                score_pros_ext = scorer.normalize_prosody(raw_pros)
+
+                risk_val = prob_spoof # The model acts as the risk scorer directly
         
             # Results
             st.divider()
@@ -167,9 +177,9 @@ with tab1:
             
             # Metrics
             c1, c2, c3 = st.columns(3)
-            c1.metric("DL Spoof Probability", f"{prob_spoof:.2%}", delta_color="inverse")
-            c2.metric("Artifact Score", f"{score_art:.2f}")
-            c3.metric("Prosody Stability", f"{score_pros:.2f}")
+            c1.metric("Risk Score", f"{risk_val:.2%}", delta_color="inverse")
+            c2.metric("Learned Artifact Signal", f"{feat_artifact:.2f}")
+            c3.metric("Learned Prosody Instability", f"{feat_prosody:.2f}")
             
             st.markdown("### Risk Assessment")
             
@@ -186,26 +196,24 @@ with tab1:
             st.markdown(f"<h2 style='color:{color}'>{risk_label} (Score: {risk_val:.2f})</h2>", unsafe_allow_html=True)
             
             # Explanation
-            with st.expander("Show Neuro-Fuzzy Explanation"):
-                st.write("Top Fired Rules:")
-                strengths = firing_strengths[0].detach().numpy()
-                indices = np.argsort(strengths)[::-1]
-                
-                for i in range(3):
-                    idx = indices[i]
-                    val = strengths[idx]
-                    if val > 0.01:
-                        rule_desc = fuzzy.get_rule_interpretation(idx)
-                        st.write(f"- **Rule {idx+1}** ({val:.2f}): IF {rule_desc} THEN Risk contributes.")
-                
-                st.write("---")
-                st.write("Interpretation:")
-                if prob_spoof > 0.8:
-                    st.write("- Deep Learning model strongly detects spoofing patterns.")
-                if score_art > 0.7:
-                    st.write("- High signal artifacts detected (flatness/variance anomalies).")
-                if score_pros < 0.3:
-                    st.write("- Unnatural prosody stability (monotone or jittery).")
+            if firing_strengths is not None:
+                with st.expander("Show Neuro-Fuzzy Explanation"):
+                    st.write("Top Fired Rules (Internal Logic):")
+                    strengths = firing_strengths[0].cpu().numpy()
+                    indices = np.argsort(strengths)[::-1]
+                    
+                    # We need access to the rule base description. 
+                    # The model has 'self.fuzzy'. 
+                    
+                    for i in range(3):
+                        idx = indices[i]
+                        val = strengths[idx]
+                        if val > 0.01:
+                            rule_desc = model.fuzzy.get_rule_interpretation(idx)
+                            st.write(f"- **Rule {idx+1}** ({val:.2f}): IF {rule_desc} THEN Risk contributes.")
+                    
+                    st.write("---")
+                    st.caption(f"External Checks - Artifacts: {score_art_ext:.2f}, Prosody: {score_pros_ext:.2f}")
                     
         except Exception as e:
             st.error(f"Error during analysis: {e}")
@@ -255,29 +263,30 @@ with tab2:
                 
                 # DL Inference
                 with torch.no_grad():
-                    logits = model(features.unsqueeze(0))
-                    prob_bonafide = torch.softmax(logits, dim=1)[0, 1].item()
-                    prob_spoof = 1.0 - prob_bonafide
+                    logits, risk_score, firing_strengths, semantic_feats = model.forward_explain(features.unsqueeze(0))
+                    
+                    if risk_score is not None:
+                        prob_spoof = risk_score.item()
+                        learned_feats = semantic_feats[0].cpu().numpy()
+                        feat_artifact = learned_feats[1]
+                        feat_prosody = learned_feats[2]
+                    else:
+                        prob_bonafide = torch.softmax(logits, dim=1)[0, 1].item()
+                        prob_spoof = 1.0 - prob_bonafide
+                        feat_artifact = 0.0
+                        feat_prosody = 0.0
                 
-                # Artifact/Prosody Scores
-                raw_art = compute_artifact_scores(waveform_np, sr)
-                raw_pros = compute_prosody_scores(waveform_np, sr)
-                score_art = scorer.normalize_artifact(raw_art)
-                score_pros = scorer.normalize_prosody(raw_pros)
-                
-                # Fuzzy Inference
-                fuzzy_input = torch.tensor([[prob_spoof, score_art, score_pros]])
-                risk_score, firing_strengths, memberships = fuzzy(fuzzy_input)
-                risk_val = risk_score.item()
+                # Risk = Prob Spoof (Model Decision)
+                risk_val = prob_spoof
                 
                 # Results
                 st.divider()
                 st.subheader("🛡️ Live Detection Results")
                 
                 c1, c2, c3 = st.columns(3)
-                c1.metric("DL Spoof Probability", f"{prob_spoof:.2%}", delta_color="inverse")
-                c2.metric("Artifact Score", f"{score_art:.2f}")
-                c3.metric("Prosody Stability", f"{score_pros:.2f}")
+                c1.metric("Risk Score", f"{risk_val:.2%}", delta_color="inverse")
+                c2.metric("Learned Artifact Signal", f"{feat_artifact:.2f}")
+                c3.metric("Learned Prosody Instability", f"{feat_prosody:.2f}")
                 
                 st.markdown("### Risk Assessment")
                 
@@ -319,28 +328,25 @@ with tab3:
                             if features.dim() == 2:
                                 features = features.unsqueeze(0)
                             
-                            # DL
-                            logits = model(features.unsqueeze(0))
-                            prob_spoof = 1.0 - torch.softmax(logits, dim=1)[0, 1].item()
+                            # DL with Explanation
+                            logits, risk_score, _, semantic_feats = model.forward_explain(features.unsqueeze(0))
                             
-                            # Fuzzy Attributes
-                            raw_art = compute_artifact_scores(waveform_np, sr)
-                            raw_pros = compute_prosody_scores(waveform_np, sr)
-                            
-                            score_art = scorer.normalize_artifact(raw_art)
-                            score_pros = scorer.normalize_prosody(raw_pros)
-                            
-                            # Fuzzy Score
-                            fuzzy_input = torch.tensor([[prob_spoof, score_art, score_pros]])
-                            risk_score, _, _ = fuzzy(fuzzy_input)
+                            if risk_score is not None:
+                                prob_spoof = risk_score.item()
+                                learned_feats = semantic_feats[0].cpu().numpy()
+                                score_art = learned_feats[1]
+                                score_pros = learned_feats[2]
+                            else:
+                                prob_spoof = 1.0 - torch.softmax(logits, dim=1)[0, 1].item()
+                                score_art = 0.0
+                                score_pros = 0.0
                             
                             results.append({
                                 "Filename": fname,
-                                "Spoof Prob": round(prob_spoof, 4),
-                                "Artifact Score": round(score_art, 4),
-                                "Prosody Score": round(score_pros, 4),
-                                "Risk Score": round(risk_score.item(), 4),
-                                "Decision": "Fake" if risk_score.item() > 0.5 else "Real"
+                                "Risk Score": round(prob_spoof, 4),
+                                "Learned Artifact": round(score_art, 4),
+                                "Learned Prosody": round(score_pros, 4),
+                                "Decision": "Fake" if prob_spoof > 0.5 else "Real"
                             })
                         except Exception as e:
                             st.warning(f"Error processing {fname}: {e}")
