@@ -116,7 +116,11 @@ with tab1:
         
         # Load audio using librosa
         uploaded_file.seek(0)
-        waveform_np, sr = librosa.load(uploaded_file, sr=None, mono=True)
+        try:
+            waveform_np, sr = librosa.load(uploaded_file, sr=None, mono=True)
+        except Exception as e:
+            st.error(f"Error loading audio file: {e}. The file might be corrupted.")
+            st.stop()
         
         # Display Spectrogram
         st.subheader("Analysis")
