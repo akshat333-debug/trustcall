@@ -16,6 +16,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from src.utils.config import load_config
 from src.models.resnet_bilstm import ResNetBiLSTM
 from src.models.anfis_fuzzy import NeuroFuzzyLayer
+from src.xai.gradcam import GradCAM # XAI
 from src.data.features import compute_artifact_scores, compute_prosody_scores
 from src.models.artifact_prosody import ArtifactProsodyScorer
 
@@ -27,8 +28,8 @@ st.markdown("### Advanced Audio Deepfake Detection with Explainable AI (Neuro-Fu
 
 # Sidebar
 st.sidebar.header("Configuration")
-default_model = os.path.join(PROJECT_ROOT, "outputs/deepvoice_weighted/best_model.pth")
-default_config = os.path.join(PROJECT_ROOT, "configs/deepvoice_weighted_v2.yaml")
+default_model = os.path.join(PROJECT_ROOT, "outputs/deepvoice_fuzzy/best_model.pth")
+default_config = os.path.join(PROJECT_ROOT, "configs/deepvoice_fuzzy.yaml")
 model_path = st.sidebar.text_input("Model Checkpoint Path", default_model)
 config_path = st.sidebar.text_input("Config Path", default_config)
 threshold = st.sidebar.slider("Detection Threshold", 0.0, 1.0, 0.5)
@@ -56,6 +57,25 @@ class LibrosaFeatureExtractor:
         )
         log_mel = np.log(mel_spec + 1e-6)
         return torch.tensor(log_mel, dtype=torch.float32)
+
+# Helper for XAI
+def preprocess_audio(waveform, sr):
+    # Standard values matching config
+    n_fft = 1024
+    hop_length = 256
+    n_mels = 80
+    
+    if sr != 16000:
+        waveform = librosa.resample(waveform, orig_sr=sr, target_sr=16000)
+        
+    mel_spec = librosa.feature.melspectrogram(
+        y=waveform, sr=16000, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels
+    )
+    log_mel = np.log(mel_spec + 1e-6)
+    
+    # Shape: (1, 80, T)
+    tensor = torch.tensor(log_mel, dtype=torch.float32).unsqueeze(0)
+    return tensor
 
 # Load System
 @st.cache_resource
@@ -88,7 +108,7 @@ except Exception as e:
     st.stop()
 
 # Tabs
-tab1, tab2, tab3 = st.tabs(["Single Audio Analysis", "🎤 Live Recording", "Batch Processing"])
+tab1, tab2, tab3, tab4 = st.tabs(["Single Audio Analysis", "🎤 Live Recording", "Batch Processing", "Explain Decision (XAI)"])
 
 with tab1:
     uploaded_file = st.file_uploader("Upload Audio (FLAC/WAV)", type=["flac", "wav"])
@@ -337,3 +357,54 @@ with tab3:
                 st.download_button("Download CSV", csv, "trustcall_results.csv", "text/csv")
         else:
             st.error("Directory not found.")
+
+with tab4:
+        st.header("Explainable AI: Why is it Fake?")
+        
+        uploaded_file = st.file_uploader("Upload Audio for XAI Analysis", type=['wav', 'mp3', 'flac'])
+        
+        if uploaded_file:
+            # Load and preprocess
+            waveform, sr = librosa.load(uploaded_file, sr=16000, duration=4.0)
+            st.audio(uploaded_file, format='audio/wav')
+            
+            if st.button("Generate Heatmap"):
+                 with st.spinner("Computing Grad-CAM attention map..."):
+                    # 1. Prepare Model and Input
+                    # We need the model instance. It's loaded in 'model' variable from sidebar
+                    # Ensure model is in eval mode
+                    model.eval()
+                    
+                    # Preprocess input
+                    features = preprocess_audio(waveform, sr) # (1, 80, 126)
+                    
+                    # 2. Init GradCAM
+                    # Target Layer: model.resnet_features
+                    grad_cam = GradCAM(model, model.resnet_features)
+                    
+                    # 3. Generate CAM
+                    # Target Class: 1 (Fake)
+                    cam = grad_cam.generate_cam(features, target_class=1) 
+                    
+                    # 4. Visualization
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.subheader("Original Spectrogram")
+                        fig1, ax1 = plt.subplots(figsize=(10, 4))
+                        ax1.imshow(features.squeeze().cpu().numpy(), aspect='auto', origin='lower', cmap='inferno')
+                        st.pyplot(fig1)
+                        
+                    with col2:
+                        st.subheader("Model Attention (Grad-CAM)")
+                        fig2, ax2 = plt.subplots(figsize=(10, 4))
+                        # Background
+                        ax2.imshow(features.squeeze().cpu().numpy(), aspect='auto', origin='lower', cmap='gray', alpha=0.5)
+                        # Overlay Heatmap
+                        # Resizing CAM to match features is done inside generate_cam, 
+                        # but features might be (80, 126). CAM returns (80, 126).
+                        im = ax2.imshow(cam, aspect='auto', origin='lower', cmap='jet', alpha=0.6) # Jet is standard for heatmaps
+                        plt.colorbar(im, ax=ax2)
+                        st.pyplot(fig2)
+                    
+                    st.info("Red areas indicate the specific time/frequency regions that convinced the model this is a Deepfake.")
