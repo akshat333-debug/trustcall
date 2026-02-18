@@ -1,4 +1,4 @@
-# 🧠 Synthetic-Voice-Detection-Vocoder-Artifacts
+# 🛡️ TrustCall (based on Neural Vocoder Artifacts)
 
 ---
 
