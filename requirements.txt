@@ -1,8 +1,20 @@
-#cuda==10.1
-numba==0.48
-numpy==1.17.0
-SoundFile
-librosa==0.7.2
-pyyaml==5.4
-tensorboardX==2.1
-matplotlib==3.0.2
+# Core
+torch>=1.12.0
+torchaudio>=0.12.0
+numpy>=1.21.0
+scipy>=1.7.0
+
+# Audio
+librosa>=0.9.2
+soundfile>=0.11.0
+
+# ML / Evaluation
+scikit-learn>=1.0.0
+pyyaml>=6.0
+tqdm>=4.64.0
+
+# Visualization
+matplotlib>=3.5.0
+
+# Demo App
+streamlit>=1.20.0
