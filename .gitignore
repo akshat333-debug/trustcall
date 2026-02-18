@@ -1,8 +1,28 @@
-venv/
+# Data
+data/
+*.flac
+*.wav
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# OS
 .DS_Store
-data/
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Outputs/Models
 outputs/
+*.pth
+*.pt
+
+# Misc
 .env
-.pytest_cache/
