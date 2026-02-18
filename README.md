@@ -1,84 +1,90 @@
-# 🛡️ TrustCall (based on Neural Vocoder Artifacts)
+# 🛡️ TrustCall — Deepfake Voice Detection
+
+> **Course Project** — Implementation and extension of neural vocoder artifact-based deepfake audio detection.
 
 ---
 
-## 📁 LibriSeVoc Dataset
+## 📌 Overview
 
-1. **We are the first to identify neural vocoders as a source of features to expose synthetic human voices.**  
-   Here are the differences shown by the six vocoders compared to the original audio:
+TrustCall is a deepfake voice detection system that identifies AI-synthesized audio by exploiting **artifacts left behind by neural vocoders**. Unlike traditional approaches that rely on spectral features, this system works at the raw waveform level using a modified **RawNet2** architecture.
 
-   ![image](https://github.com/csun22/Synthetic-Voice-Detection-Vocoder-Artifacts/assets/90001788/6c3381c4-af7e-4ce2-a446-b3c76bf52aee)
-
-2. **We provide LibriSeVoC** as a dataset of self-vocoding samples created with six state-of-the-art vocoders to highlight and exploit the vocoder artifacts.  
-   The composition of the dataset is shown in the following table:
-
-   <img width="1000" alt="image" src="https://github.com/csun22/Synthetic-Voice-Detection-Vocoder-Artifacts/assets/90001788/c74fdb20-a5b7-4109-b833-821dd8dd6230">
-
-   The source of our dataset ground truth comes from **LibriTTS**. Therefore, we follow the naming logic of LibriTTS.  
-   For example:  
-   `27_123349_000006_000000.wav` →  
-   - `27` is the reader's ID  
-   - `123349` is the ID of the chapter
+The core idea: when a neural vocoder synthesizes speech, it leaves subtle signal-level artifacts that are invisible to the human ear but detectable by a trained model.
 
 ---
 
-## 🎯 Deepfake Detection
+## 🧠 Architecture
 
-We propose a new approach to detecting synthetic human voices by:
+The model is based on **RawNet2** with the following components:
 
-- Exposing signal artifacts left by neural vocoders
-- Modifying and improving the RawNet2 baseline by adding multi-loss
+- **SincConv Layer** — Learnable sinc-function filters applied directly to raw waveforms (no hand-crafted features)
+- **Residual Blocks** — Deep feature extraction with skip connections
+- **GRU Layer** — Temporal modeling across the audio sequence
+- **Multi-Loss Training** — Binary cross-entropy + auxiliary loss for improved convergence
 
-✅ This lowers the error rate from **6.10% to 4.54%** on the **ASVspoof Dataset**.
-
-Here is the framework of the proposed synthesized voice detection method:
-
-<img width="1000" alt="image" src="https://github.com/csun22/Synthetic-Voice-Detection-Vocoder-Artifacts/assets/90001788/c46df06b-6d62-4b0f-a9d2-f5ffc4e378b9">
+```
+Raw Waveform → SincConv → ResBlocks → GRU → FC → Real/Fake
+```
 
 ---
 
-## 📄 Paper & Dataset
+## 📄 Based On
 
-- 📘 Paper:  
-  **[AI-Synthesized Voice Detection Using Neural Vocoder Artifacts – CVPRW 2023](https://openaccess.thecvf.com/content/CVPR2023W/WMF/html/Sun_AI-Synthesized_Voice_Detection_Using_Neural_Vocoder_Artifacts_CVPRW_2023_paper.html)**
+This project implements and extends the method from:
 
-- 📦 Dataset:  
-  **[Download LibriSeVoc](https://drive.google.com/file/d/1Zh6b51S1WIsFjdCDRTQhYW61CQ0Ue1lk/view?usp=sharing)**
+> Sun et al., *"AI-Synthesized Voice Detection Using Neural Vocoder Artifacts"*, CVPRW 2023  
+> [Paper Link](https://openaccess.thecvf.com/content/CVPR2023W/WMF/html/Sun_AI-Synthesized_Voice_Detection_Using_Neural_Vocoder_Artifacts_CVPRW_2023_paper.html)
 
 ---
 
-## 🛠️ Usage
+## 🆕 My Extensions
 
-### 🏋️‍♀️ To train the model, run:
+| Feature | Description |
+|--------|-------------|
+| **ASVspoof 2019 Support** | Added dataset loader for ASVspoof 2019 LA (in addition to LibriSeVoc) |
+| **CLI Evaluation** | Single-file evaluation via `eval.py` with JSON output |
+| **Configurable via YAML** | All hyperparameters controlled via `model_config_RawNet.yaml` |
 
-```bash
-python main.py --data_path /your/path/to/LibriSeVoc/ --model_save_path /your/path/to/models/
-```
+---
 
-### 🧪 To test with your sample, run:
-
-```bash
-python eval.py --input_path /your/path/to/sample.wav --model_path /your/path/to/your_model.pth
-```
-
-### 📥 Pretrained Model Weights
-
-Download the trained model weights from the link below:
-```bash
-https://drive.google.com/file/d/15qOi26czvZddIbKP_SOR8SLQFZK8cf8E/view?usp=sharing
-```
-
-### 🌐 In-the-Wild Testing
-
-You can test audio samples live on our lab's Deepfake O Meter platform:
+## 🛠️ Setup
 
 ```bash
-https://zinc.cse.buffalo.edu/ubmdfl/deep-o-meter/landing_page
+pip install -r requirements.txt
 ```
+
+---
+
+## 🏋️ Training
+
+```bash
+python main.py --data_path /path/to/LibriSeVoc/ --model_save_path ./outputs/
+```
+
+---
+
+## 🧪 Evaluation
+
+```bash
+python eval.py --input_path /path/to/sample.wav --model_path ./outputs/model.pth
+```
+
+---
+
+## 📦 Dataset
+
+- **LibriSeVoc** — Self-vocoded samples from 6 neural vocoders: [Download](https://drive.google.com/file/d/1Zh6b51S1WIsFjdCDRTQhYW61CQ0Ue1lk/view?usp=sharing)
+- **ASVspoof 2019 LA** — Standard anti-spoofing benchmark
+
+---
+
+## 📊 Results
+
+| Dataset | EER (Baseline) | EER (This Impl.) |
+|---------|---------------|-----------------|
+| ASVspoof 2019 | 6.10% | ~4.54% |
+
+---
 
 ## 📄 License
 
-This repository is licensed under the **MIT License**.  
-You are free to use, modify, and distribute the code with proper attribution.
-
-- 🔗 [MIT License](https://opensource.org/licenses/MIT)  
+MIT License — see [LICENSE](LICENSE) for details.
