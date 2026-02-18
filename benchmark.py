@@ -18,6 +18,7 @@ import yaml
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 from model import RawNet
+from eval import load_model
 
 SAMPLE_RATE = 24000
 AUDIO_LEN   = 96000   # 4 seconds
@@ -98,15 +99,7 @@ def main():
     print(f"  Runs   : {args.n_runs} per batch size")
     print(f"  Audio  : {AUDIO_LEN/SAMPLE_RATE:.1f}s @ {SAMPLE_RATE}Hz\n")
 
-    with open(args.config, 'r') as f:
-        config = yaml.safe_load(f)
-
-    model = RawNet(config['model'], device)
-    if os.path.exists(args.model_path):
-        model.load_state_dict(torch.load(args.model_path, map_location=device))
-        print(f"  Loaded checkpoint: {args.model_path}")
-    else:
-        print(f"  Warning: checkpoint not found, using random weights")
+    model = load_model(args.model_path, args.config, str(device))
     model.to(device)
 
     total_params, trainable_params = count_parameters(model)
