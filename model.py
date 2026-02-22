@@ -29,6 +29,7 @@ class SincConv(nn.Module):
         dilation=1,
         bias=False,
         groups=1,
+        learnable=False,
     ):
 
         super(SincConv, self).__init__()
@@ -40,10 +41,9 @@ class SincConv(nn.Module):
         self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.sample_rate = sample_rate
-        self.min_low_hz = 30.0
-        self.min_band_hz = 50.0
+        self.learnable = learnable
 
-        # Force odd kernel size for symmetric filters.
+        # Forcing filters to be odd (perfectly symmetric).
         if kernel_size % 2 == 0:
             self.kernel_size = self.kernel_size + 1
 
@@ -57,34 +57,59 @@ class SincConv(nn.Module):
         if groups > 1:
             raise ValueError("SincConv does not support groups.")
 
-        # Initialize filterbanks using Mel spacing.
-        low_hz = 0
-        high_hz = self.sample_rate / 2
-        mel = np.linspace(self.to_mel(low_hz), self.to_mel(high_hz), self.out_channels + 1)
-        hz = self.to_hz(mel)
+        # initialize filterbanks using Mel scale
+        nfft = 512
+        f = int(self.sample_rate / 2) * np.linspace(0, 1, int(nfft / 2) + 1)
+        fmel = self.to_mel(f)  # Hz to mel conversion
+        fmelmax = np.max(fmel)
+        fmelmin = np.min(fmel)
+        filbandwidthsmel = np.linspace(fmelmin, fmelmax, self.out_channels + 1)
+        filbandwidthsf = self.to_hz(filbandwidthsmel)  # Mel to Hz conversion
+        self.mel = filbandwidthsf
 
-        # Learnable low cutoff and bandwidth for each filter.
-        self.low_hz_ = nn.Parameter(torch.tensor(hz[:-1], dtype=torch.float32).view(-1, 1))
-        self.band_hz_ = nn.Parameter(torch.tensor(np.diff(hz), dtype=torch.float32).view(-1, 1))
+        if self.learnable:
+            self.min_low_hz = 30.0
+            self.min_band_hz = 50.0
+            self.low_hz_ = nn.Parameter(torch.tensor(filbandwidthsf[:-1], dtype=torch.float32).view(-1, 1))
+            self.band_hz_ = nn.Parameter(torch.tensor(np.diff(filbandwidthsf), dtype=torch.float32).view(-1, 1))
 
-        half = (self.kernel_size - 1) // 2
-        n_lin = torch.arange(0, half, dtype=torch.float32)
-
-        # Hamming window and negative time axis buffers used to build symmetric kernels.
-        self.register_buffer(
-            "window_",
-            0.54 - 0.46 * torch.cos(2 * np.pi * n_lin / self.kernel_size),
-        )
-        self.register_buffer(
-            "n_",
-            (2 * np.pi * torch.arange(-half, 0, dtype=torch.float32).view(1, -1))
-            / self.sample_rate,
-        )
-
-        # Kept as a public attribute for explainability scripts.
-        self.mel = hz
+            half = (self.kernel_size - 1) // 2
+            n_lin = torch.arange(0, half, dtype=torch.float32)
+            self.register_buffer(
+                "window_",
+                0.54 - 0.46 * torch.cos(2 * np.pi * n_lin / self.kernel_size),
+            )
+            self.register_buffer(
+                "n_",
+                (2 * np.pi * torch.arange(-half, 0, dtype=torch.float32).view(1, -1))
+                / self.sample_rate,
+            )
+        else:
+            self.hsupp = torch.arange(-(self.kernel_size - 1) / 2, (self.kernel_size - 1) / 2 + 1)
+            self.band_pass = torch.zeros(self.out_channels, self.kernel_size)
 
     def forward(self, x):
+        if not self.learnable:
+            for i in range(len(self.mel) - 1):
+                fmin = self.mel[i]
+                fmax = self.mel[i + 1]
+                hhigh = (2 * fmax / self.sample_rate) * np.sinc(2 * fmax * self.hsupp / self.sample_rate)
+                hlow = (2 * fmin / self.sample_rate) * np.sinc(2 * fmin * self.hsupp / self.sample_rate)
+                hideal = hhigh - hlow
+                self.band_pass[i, :] = Tensor(np.hamming(self.kernel_size)) * Tensor(hideal)
+
+            band_pass_filter = self.band_pass.to(x.device, dtype=x.dtype)
+            filters = band_pass_filter.view(self.out_channels, 1, self.kernel_size)
+            return F.conv1d(
+                x,
+                filters,
+                stride=self.stride,
+                padding=self.padding,
+                dilation=self.dilation,
+                bias=None,
+                groups=1,
+            )
+
         device = x.device
         dtype = x.dtype
 
@@ -102,9 +127,7 @@ class SincConv(nn.Module):
         f_times_t_low = torch.matmul(low.to(dtype=dtype), n_)
         f_times_t_high = torch.matmul(high.to(dtype=dtype), n_)
 
-        band_pass_left = (
-            (torch.sin(f_times_t_high) - torch.sin(f_times_t_low)) / (n_ / 2)
-        ) * window_
+        band_pass_left = ((torch.sin(f_times_t_high) - torch.sin(f_times_t_low)) / (n_ / 2)) * window_
         band_pass_center = 2 * band.view(-1, 1)
         band_pass_right = torch.flip(band_pass_left, dims=[1])
 
@@ -116,7 +139,6 @@ class SincConv(nn.Module):
             self.mel = torch.cat([low[:, 0], high[-1:, 0]], dim=0).cpu().numpy()
 
         filters = band_pass.view(self.out_channels, 1, self.kernel_size)
-
         return F.conv1d(
             x,
             filters,
@@ -130,9 +152,10 @@ class SincConv(nn.Module):
 
         
 class Residual_block(nn.Module):
-    def __init__(self, nb_filts, first = False):
+    def __init__(self, nb_filts, first=False, legacy_forward=True):
         super(Residual_block, self).__init__()
         self.first = first
+        self.legacy_forward = legacy_forward
         
         if not self.first:
             self.bn1 = nn.BatchNorm1d(num_features = nb_filts[0])
@@ -172,7 +195,8 @@ class Residual_block(nn.Module):
         else:
             out = x
             
-        out = self.conv1(out)
+        # Keep legacy behavior for checkpoint compatibility unless explicitly disabled.
+        out = self.conv1(x if self.legacy_forward else out)
         out = self.bn2(out)
         out = self.lrelu(out)
         out = self.conv2(out)
@@ -197,20 +221,34 @@ class RawNet(nn.Module):
         self.device=device
 
         self.Sinc_conv=SincConv(device=self.device,
-			out_channels = d_args['filts'][0],
-			kernel_size = d_args['first_conv'],
-                        in_channels = d_args['in_channels']
+				out_channels = d_args['filts'][0],
+				kernel_size = d_args['first_conv'],
+                        in_channels = d_args['in_channels'],
+                        learnable = d_args.get('learnable_sinc', False)
         )
         
         self.first_bn = nn.BatchNorm1d(num_features = d_args['filts'][0])
         self.selu = nn.SELU(inplace=True)
-        self.block0 = nn.Sequential(Residual_block(nb_filts = d_args['filts'][1], first = True))
-        self.block1 = nn.Sequential(Residual_block(nb_filts = d_args['filts'][1]))
-        self.block2 = nn.Sequential(Residual_block(nb_filts = d_args['filts'][2]))
+        legacy_resblock = d_args.get('legacy_resblock', True)
+        self.block0 = nn.Sequential(
+            Residual_block(nb_filts=d_args['filts'][1], first=True, legacy_forward=legacy_resblock)
+        )
+        self.block1 = nn.Sequential(
+            Residual_block(nb_filts=d_args['filts'][1], legacy_forward=legacy_resblock)
+        )
+        self.block2 = nn.Sequential(
+            Residual_block(nb_filts=d_args['filts'][2], legacy_forward=legacy_resblock)
+        )
         d_args['filts'][2][0] = d_args['filts'][2][1]
-        self.block3 = nn.Sequential(Residual_block(nb_filts = d_args['filts'][2]))
-        self.block4 = nn.Sequential(Residual_block(nb_filts = d_args['filts'][2]))
-        self.block5 = nn.Sequential(Residual_block(nb_filts = d_args['filts'][2]))
+        self.block3 = nn.Sequential(
+            Residual_block(nb_filts=d_args['filts'][2], legacy_forward=legacy_resblock)
+        )
+        self.block4 = nn.Sequential(
+            Residual_block(nb_filts=d_args['filts'][2], legacy_forward=legacy_resblock)
+        )
+        self.block5 = nn.Sequential(
+            Residual_block(nb_filts=d_args['filts'][2], legacy_forward=legacy_resblock)
+        )
         self.avgpool = nn.AdaptiveAvgPool1d(1)
 
         self.fc_attention0 = self._make_attention_fc(in_features = d_args['filts'][1][-1],

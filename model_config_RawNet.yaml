@@ -8,6 +8,8 @@ model:
   nb_samp: 64600
   first_conv: 1024   # no. of filter coefficients 
   in_channels: 1
+  learnable_sinc: false   # set true only when training new checkpoints
+  legacy_resblock: true   # keep true for compatibility with existing checkpoints
   filts: [20, [20, 20], [20, 128], [128, 128]] # no. of filters channel in residual blocks
   blocks: [2, 4]
   nb_fc_node: 1024
@@ -17,6 +19,5 @@ model:
   #nb_classes: 7
   
   
-
 
 
