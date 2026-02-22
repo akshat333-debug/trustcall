@@ -16,10 +16,11 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 import numpy as np
 import torch
 import yaml
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -27,6 +28,12 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from model import RawNet
 from asvspoof_dataset import Dataset_ASVspoof2019
+from main import Dataset_LibriSeVoc
+
+os.environ.setdefault("XDG_CACHE_HOME", os.path.join(tempfile.gettempdir(), "trustcall-cache"))
+os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "trustcall-mpl"))
+os.makedirs(os.environ["XDG_CACHE_HOME"], exist_ok=True)
+os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
 try:
     import matplotlib
@@ -38,6 +45,7 @@ except ImportError:
 
 SAMPLE_RATE = 24000
 MAX_LEN     = 96000
+BENIGN_MISSING_SINC = {'Sinc_conv.low_hz_', 'Sinc_conv.band_hz_', 'Sinc_conv.window_', 'Sinc_conv.n_'}
 
 
 def pad_audio(x, max_len=MAX_LEN):
@@ -49,9 +57,14 @@ def pad_audio(x, max_len=MAX_LEN):
 def compute_eer(labels, scores):
     """Compute Equal Error Rate."""
     from sklearn.metrics import roc_curve
+    if len(np.unique(labels)) < 2:
+        return float("nan"), 0.5
     fpr, tpr, thresholds = roc_curve(labels, scores, pos_label=1)
     fnr = 1 - tpr
-    idx = np.nanargmin(np.abs(fnr - fpr))
+    diff = np.abs(fnr - fpr)
+    if np.all(np.isnan(diff)):
+        return float("nan"), 0.5
+    idx = np.nanargmin(diff)
     return (fpr[idx] + fnr[idx]) / 2, thresholds[idx]
 
 
@@ -61,12 +74,16 @@ def evaluate_loader(model, loader, device):
     all_labels, all_scores = [], []
     model.eval()
     for batch in tqdm(loader, desc='  Evaluating', leave=False):
-        x, y = batch
+        if isinstance(batch, (list, tuple)) and len(batch) == 3:
+            x, _, y = batch
+        else:
+            x, y = batch
         x = x.to(device)
+        y = y.to(device)
         out_binary, _ = model(x)
         probs = torch.exp(out_binary)
         all_scores.extend(probs[:, 1].cpu().numpy().tolist())
-        all_labels.extend(y.numpy().tolist())
+        all_labels.extend(y.cpu().numpy().tolist())
     return np.array(all_labels), np.array(all_scores)
 
 
@@ -85,13 +102,17 @@ def run_cross_eval(model, device, datasets: dict, out_dir: str):
         eer, eer_thresh = compute_eer(labels, scores)
 
         from sklearn.metrics import roc_auc_score, accuracy_score
-        preds = (scores >= eer_thresh).astype(int)
+        threshold = eer_thresh if np.isfinite(eer_thresh) else 0.5
+        preds = (scores >= threshold).astype(int)
         acc   = accuracy_score(labels, preds)
-        auc   = roc_auc_score(labels, scores)
+        try:
+            auc = roc_auc_score(labels, scores)
+        except ValueError:
+            auc = float("nan")
 
         results[name] = {
-            'eer':       round(float(eer), 4),
-            'auc':       round(float(auc), 4),
+            'eer':       round(float(eer), 4) if np.isfinite(eer) else None,
+            'auc':       round(float(auc), 4) if np.isfinite(auc) else None,
             'accuracy':  round(float(acc), 4),
             'n_samples': int(len(labels)),
             'n_real':    int((labels == 0).sum()),
@@ -108,8 +129,8 @@ def run_cross_eval(model, device, datasets: dict, out_dir: str):
     # Plot comparison bar chart
     if HAS_MPL and results:
         names = list(results.keys())
-        eers  = [results[n]['eer'] * 100 for n in names]
-        aucs  = [results[n]['auc'] for n in names]
+        eers  = [((results[n]['eer'] if results[n]['eer'] is not None else np.nan) * 100) for n in names]
+        aucs  = [(results[n]['auc'] if results[n]['auc'] is not None else np.nan) for n in names]
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
         fig.suptitle('Cross-Dataset Generalization', fontsize=14, fontweight='bold')
@@ -119,7 +140,9 @@ def run_cross_eval(model, device, datasets: dict, out_dir: str):
         ax1.set_ylabel('EER (%)', fontsize=11)
         ax1.set_title('Equal Error Rate (lower = better)', fontsize=11)
         for i, v in enumerate(eers):
-            ax1.text(i, v + 0.2, f'{v:.2f}%', ha='center', fontsize=10)
+            label = "NA" if np.isnan(v) else f'{v:.2f}%'
+            y_text = 0.2 if np.isnan(v) else v + 0.2
+            ax1.text(i, y_text, label, ha='center', fontsize=10)
         ax1.grid(True, alpha=0.3, axis='y')
 
         ax2.bar(names, aucs, color=colors, alpha=0.8)
@@ -127,7 +150,9 @@ def run_cross_eval(model, device, datasets: dict, out_dir: str):
         ax2.set_title('AUC-ROC (higher = better)', fontsize=11)
         ax2.set_ylim(0, 1.05)
         for i, v in enumerate(aucs):
-            ax2.text(i, v + 0.01, f'{v:.3f}', ha='center', fontsize=10)
+            label = "NA" if np.isnan(v) else f'{v:.3f}'
+            y_text = 0.01 if np.isnan(v) else v + 0.01
+            ax2.text(i, y_text, label, ha='center', fontsize=10)
         ax2.grid(True, alpha=0.3, axis='y')
 
         plt.tight_layout()
@@ -139,6 +164,13 @@ def run_cross_eval(model, device, datasets: dict, out_dir: str):
     return results
 
 
+def maybe_subset(ds, max_samples):
+    if max_samples is None:
+        return ds
+    n = min(max_samples, len(ds))
+    return Subset(ds, list(range(n)))
+
+
 def main():
     parser = argparse.ArgumentParser(description='TrustCall Cross-Dataset Evaluation')
     parser.add_argument('--model_path',      default='outputs/best_model.pth')
@@ -146,6 +178,9 @@ def main():
     parser.add_argument('--asvspoof_path',   default=None, help='Path to ASVspoof 2019 LA')
     parser.add_argument('--librisevoc_path', default=None, help='Path to LibriSeVoc')
     parser.add_argument('--batch_size',      type=int, default=16)
+    parser.add_argument('--num_workers',     type=int, default=0)
+    parser.add_argument('--max_samples_per_set', type=int, default=None,
+                        help='Optional cap per evaluation split for quick smoke runs')
     parser.add_argument('--out_dir',         default='outputs/cross_eval')
     args = parser.parse_args()
 
@@ -155,8 +190,12 @@ def main():
 
     model = RawNet(config['model'], device)
     if os.path.exists(args.model_path):
-        model.load_state_dict(torch.load(args.model_path, map_location=device))
+        state_dict = torch.load(args.model_path, map_location=device)
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
         print(f"  Loaded: {args.model_path}")
+        non_benign_missing = [k for k in missing if k not in BENIGN_MISSING_SINC]
+        if non_benign_missing or unexpected:
+            print(f"  Partial load: missing={len(non_benign_missing)} unexpected={len(unexpected)}")
     else:
         print(f"  Warning: no checkpoint, using random weights")
     model.to(device)
@@ -168,10 +207,21 @@ def main():
             try:
                 ds = Dataset_ASVspoof2019(args.asvspoof_path, split=split,
                                           resample_to=SAMPLE_RATE)
+                ds = maybe_subset(ds, args.max_samples_per_set)
                 datasets[f'ASVspoof2019_{split}'] = DataLoader(
-                    ds, batch_size=args.batch_size, shuffle=False, num_workers=2)
+                    ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
             except Exception as e:
                 print(f"  Skipping ASVspoof {split}: {e}")
+
+    if args.librisevoc_path and os.path.isdir(args.librisevoc_path):
+        try:
+            ds = Dataset_LibriSeVoc(args.librisevoc_path, split='test')
+            ds = maybe_subset(ds, args.max_samples_per_set)
+            datasets['LibriSeVoc_test'] = DataLoader(
+                ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers
+            )
+        except Exception as e:
+            print(f"  Skipping LibriSeVoc test: {e}")
 
     if not datasets:
         print("  No datasets found. Provide --asvspoof_path and/or --librisevoc_path")

@@ -9,6 +9,13 @@ Usage:
 import argparse
 import os
 import sys
+import tempfile
+
+os.environ.setdefault("XDG_CACHE_HOME", os.path.join(tempfile.gettempdir(), "trustcall-cache"))
+os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "trustcall-mpl"))
+os.makedirs(os.environ["XDG_CACHE_HOME"], exist_ok=True)
+os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
 import numpy as np
 import torch
 import yaml
@@ -25,6 +32,7 @@ from model import RawNet
 
 SAMPLE_RATE = 24000
 MAX_LEN     = 96000
+BENIGN_MISSING_SINC = {'Sinc_conv.low_hz_', 'Sinc_conv.band_hz_', 'Sinc_conv.window_', 'Sinc_conv.n_'}
 
 
 def pad_audio(x, max_len=MAX_LEN):
@@ -54,7 +62,10 @@ def plot_sinc_filters(model, out_path, n_filters=20):
     # Plot 1: Filter bank frequency response
     ax = axes[0]
     n_show = min(n_filters, len(mel_freqs) - 1)
-    cmap = cm.get_cmap('plasma', n_show)
+    if hasattr(matplotlib, "colormaps"):
+        cmap = matplotlib.colormaps.get_cmap('plasma').resampled(n_show)
+    else:
+        cmap = cm.get_cmap('plasma', n_show)
 
     for i in range(n_show):
         fmin = mel_freqs[i]
@@ -164,8 +175,12 @@ def main():
 
     model = RawNet(config['model'], device)
     if os.path.exists(args.model_path):
-        model.load_state_dict(torch.load(args.model_path, map_location=device))
+        state_dict = torch.load(args.model_path, map_location=device)
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
         print(f"  Loaded: {args.model_path}")
+        non_benign_missing = [k for k in missing if k not in BENIGN_MISSING_SINC]
+        if non_benign_missing or unexpected:
+            print(f"  Partial load: missing={len(non_benign_missing)} unexpected={len(unexpected)}")
     model.eval()
 
     print("\n[1/2] Visualizing SincConv filter bank...")

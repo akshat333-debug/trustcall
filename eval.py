@@ -1,18 +1,21 @@
 import argparse
-import sys
 import os
 import numpy as np
 import torch
-from torch import nn
 from torch import Tensor
 import yaml
 from model import RawNet
-from torch.nn import functional as F
 import librosa
 import json
 from datetime import datetime
 
 VOCODER_NAMES = ['gt', 'wavegrad', 'diffwave', 'parallel_wave_gan', 'wavernn', 'wavenet', 'melgan']
+BENIGN_MISSING_SINC = {
+    'Sinc_conv.low_hz_',
+    'Sinc_conv.band_hz_',
+    'Sinc_conv.window_',
+    'Sinc_conv.n_',
+}
 
 
 def pad(x, max_len=96000):
@@ -33,7 +36,8 @@ def load_sample(sample_path, max_len=96000):
         return [Tensor(pad(y, max_len))]
 
     y_list = []
-    for i in range(int(len(y) / max_len)):
+    n_seg = int(np.ceil(len(y) / max_len))
+    for i in range(n_seg):
         y_seg = y[i * max_len: (i + 1) * max_len]
         y_list.append(Tensor(pad(y_seg, max_len)))
     return y_list
@@ -47,8 +51,16 @@ def load_model(model_path, config_path='model_config_RawNet.yaml', device='cpu')
     model = model.to(device)
     if model_path and os.path.exists(model_path):
         try:
-            model.load_state_dict(torch.load(model_path, map_location=device))
+            state_dict = torch.load(model_path, map_location=device)
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
             print(f'Model loaded: {model_path}')
+            non_benign_missing = [k for k in missing if k not in BENIGN_MISSING_SINC]
+            if non_benign_missing:
+                print(f'  Missing keys: {len(non_benign_missing)} (e.g., {non_benign_missing[:3]})')
+            elif missing:
+                print('  Checkpoint compatibility: using initialized SincConv parameters.')
+            if unexpected:
+                print(f'  Unexpected keys: {len(unexpected)} (e.g., {unexpected[:3]})')
         except RuntimeError as e:
             print(f'WARNING: Could not load checkpoint (architecture mismatch): {e}')
             print('  Using randomly initialized weights.')
@@ -70,23 +82,24 @@ def run_eval(input_path, model_path, config_path='model_config_RawNet.yaml'):
     for m_batch in load_sample(input_path):
         m_batch = m_batch.to(device=device, dtype=torch.float).unsqueeze(0)
         logits, multi_logits = model(m_batch)
-        probs       = F.softmax(logits, dim=-1)
-        probs_multi = F.softmax(multi_logits, dim=-1)
+        probs = torch.exp(logits)
+        probs_multi = torch.exp(multi_logits)
         out_list_multi.append(probs_multi.tolist()[0])
         out_list_binary.append(probs.tolist()[0])
 
     result_multi  = np.average(out_list_multi,  axis=0).tolist()
     result_binary = np.average(out_list_binary, axis=0).tolist()
 
-    verdict = 'FAKE' if result_binary[0] > 0.5 else 'REAL'
+    # Unified convention across RawNet scripts: class 0=real, class 1=fake.
+    verdict = 'FAKE' if result_binary[1] > 0.5 else 'REAL'
     print(f'\nVerdict: {verdict}')
-    print(f'Binary  — fake: {result_binary[0]:.4f}  real: {result_binary[1]:.4f}')
+    print(f'Binary  — real: {result_binary[0]:.4f}  fake: {result_binary[1]:.4f}')
     print('Vocoder — ' + '  '.join(f'{n}:{v:.3f}' for n, v in zip(VOCODER_NAMES, result_multi)))
 
     return {
         'verdict':      verdict,
-        'fake_prob':    round(result_binary[0], 4),
-        'real_prob':    round(result_binary[1], 4),
+        'real_prob':    round(result_binary[0], 4),
+        'fake_prob':    round(result_binary[1], 4),
         'vocoder':      {n: round(v, 4) for n, v in zip(VOCODER_NAMES, result_multi)},
         'file':         os.path.basename(input_path),
         'timestamp':    datetime.now().isoformat(),

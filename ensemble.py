@@ -6,7 +6,9 @@ then ensembles its predictions with RawNet for improved accuracy.
 Usage:
     # Train LFCC-LCNN:
     python ensemble.py --mode train_lfcc \
-        --data_path /path/to/data --model_save_path outputs/lfcc_model.pth
+        --dataset asvspoof \
+        --data_path "data/ASVspoof 2019 Dataset 2/LA/LA" \
+        --lfcc_path outputs/lfcc_model.pth
 
     # Evaluate ensemble:
     python ensemble.py --mode eval_ensemble \
@@ -19,16 +21,21 @@ import argparse
 import os
 import sys
 import json
+import random
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import yaml
 import librosa
+from torch.utils.data import DataLoader, Dataset, Subset
+from tqdm import tqdm
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 
+from asvspoof_dataset import Dataset_ASVspoof2019
+from main import Dataset_LibriSeVoc
 from model import RawNet
 
 SAMPLE_RATE = 24000
@@ -36,6 +43,8 @@ MAX_LEN     = 96000
 N_LFCC      = 60
 N_FFT       = 512
 HOP_LENGTH  = 160
+LFCC_T_TARGET = 300
+BENIGN_MISSING_SINC = {'Sinc_conv.low_hz_', 'Sinc_conv.band_hz_', 'Sinc_conv.window_', 'Sinc_conv.n_'}
 
 
 # ── LFCC Feature Extraction ───────────────────────────────────────────────────
@@ -144,6 +153,182 @@ class LCNN(nn.Module):
         return self.logsoftmax(x)
 
 
+# ── LFCC Dataset + Training ────────────────────────────────────────────────────
+
+def pad_lfcc_time(lfcc, t_target=LFCC_T_TARGET):
+    if lfcc.shape[1] >= t_target:
+        return lfcc[:, :t_target]
+    pad = t_target - lfcc.shape[1]
+    return np.pad(lfcc, ((0, 0), (0, pad)), mode='wrap')
+
+
+class LFCCDataset(Dataset):
+    """Wrap waveform datasets and expose LFCC tensors for LCNN training."""
+
+    def __init__(self, base_dataset):
+        self.base_dataset = base_dataset
+
+    def __len__(self):
+        return len(self.base_dataset)
+
+    def __getitem__(self, idx):
+        sample = self.base_dataset[idx]
+        if isinstance(sample, (list, tuple)) and len(sample) == 3:
+            x, _, y = sample
+        else:
+            x, y = sample
+
+        waveform_np = x.numpy() if isinstance(x, torch.Tensor) else np.array(x)
+        lfcc = extract_lfcc(waveform_np)
+        lfcc = pad_lfcc_time(lfcc)
+
+        x_lfcc = torch.tensor(lfcc, dtype=torch.float32).unsqueeze(0)  # (1, 3*n_lfcc, T)
+        y_bin = torch.tensor(int(y), dtype=torch.int64)
+        return x_lfcc, y_bin
+
+
+def compute_eer(y_true, y_score):
+    from sklearn.metrics import roc_curve
+
+    if len(np.unique(y_true)) < 2:
+        return float("nan")
+
+    fpr, tpr, thresholds = roc_curve(y_true, y_score, pos_label=1)
+    fnr = 1 - tpr
+    idx = np.nanargmin(np.abs(fnr - fpr))
+    return float((fpr[idx] + fnr[idx]) / 2)
+
+
+def build_base_dataset(dataset_name, data_path, split):
+    if dataset_name == "asvspoof":
+        return Dataset_ASVspoof2019(data_path, split=split, resample_to=SAMPLE_RATE)
+    if dataset_name == "librisevoc":
+        return Dataset_LibriSeVoc(data_path, split=split)
+    raise ValueError(f"Unsupported dataset: {dataset_name}")
+
+
+def maybe_subset(ds, max_samples):
+    if max_samples is None:
+        return ds
+    n = min(max_samples, len(ds))
+    return Subset(ds, list(range(n)))
+
+
+def train_lfcc_model(args):
+    if not args.data_path:
+        raise SystemExit("--data_path is required for --mode train_lfcc")
+
+    if not os.path.isdir(args.data_path):
+        raise SystemExit(f"Dataset path not found: {args.data_path}")
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+
+    print(f"Device: {device}")
+    print(f"Building LFCC datasets from {args.dataset}...")
+
+    train_base = build_base_dataset(args.dataset, args.data_path, args.train_split)
+    dev_base = build_base_dataset(args.dataset, args.data_path, args.dev_split)
+    train_base = maybe_subset(train_base, args.max_train_samples)
+    dev_base = maybe_subset(dev_base, args.max_dev_samples)
+
+    train_ds = LFCCDataset(train_base)
+    dev_ds = LFCCDataset(dev_base)
+
+    train_loader = DataLoader(
+        train_ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers
+    )
+    dev_loader = DataLoader(
+        dev_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers
+    )
+
+    model = LCNN(n_lfcc=N_LFCC).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    criterion = nn.NLLLoss()
+
+    best_eer = float("inf")
+    out_path = args.lfcc_path
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+
+    print(f"\n{'='*55}")
+    print("  Training LFCC-LCNN")
+    print(f"{'='*55}")
+    print(
+        f"  Train={len(train_ds)} Dev={len(dev_ds)} "
+        f"Epochs={args.epochs} Batch={args.batch_size} LR={args.lr}"
+    )
+
+    for epoch in range(1, args.epochs + 1):
+        model.train()
+        tr_loss = 0.0
+        tr_correct = 0
+        tr_total = 0
+
+        for x, y in tqdm(train_loader, desc=f"Train {epoch}/{args.epochs}", leave=False):
+            x = x.to(device)
+            y = y.to(device)
+
+            optimizer.zero_grad()
+            out = model(x)
+            loss = criterion(out, y)
+            loss.backward()
+            optimizer.step()
+
+            tr_loss += loss.item() * x.size(0)
+            tr_correct += (out.argmax(1) == y).sum().item()
+            tr_total += x.size(0)
+
+        model.eval()
+        dv_loss = 0.0
+        dv_correct = 0
+        dv_total = 0
+        y_true = []
+        y_score = []
+        with torch.no_grad():
+            for x, y in dev_loader:
+                x = x.to(device)
+                y = y.to(device)
+                out = model(x)
+                loss = criterion(out, y)
+                dv_loss += loss.item() * x.size(0)
+                dv_correct += (out.argmax(1) == y).sum().item()
+                dv_total += x.size(0)
+                probs = torch.exp(out)[:, 1]
+                y_true.extend(y.cpu().numpy().tolist())
+                y_score.extend(probs.cpu().numpy().tolist())
+
+        tr_loss /= max(tr_total, 1)
+        dv_loss /= max(dv_total, 1)
+        tr_acc = tr_correct / max(tr_total, 1)
+        dv_acc = dv_correct / max(dv_total, 1)
+        dv_eer = compute_eer(np.array(y_true), np.array(y_score))
+
+        marker = ""
+        if np.isfinite(dv_eer) and dv_eer < best_eer:
+            best_eer = dv_eer
+            torch.save(model.state_dict(), out_path)
+            marker = " ✓"
+
+        print(
+            f"Epoch {epoch:02d} | "
+            f"tr_loss={tr_loss:.4f} tr_acc={tr_acc:.4f} | "
+            f"dv_loss={dv_loss:.4f} dv_acc={dv_acc:.4f} dv_eer={dv_eer:.4f}{marker}"
+        )
+
+    if not os.path.exists(out_path):
+        # Fallback save when EER is NaN (e.g., subset with one class only).
+        torch.save(model.state_dict(), out_path)
+    print(f"LFCC model saved: {out_path}")
+
+
 # ── Ensemble ──────────────────────────────────────────────────────────────────
 
 class TrustCallEnsemble:
@@ -179,13 +364,7 @@ class TrustCallEnsemble:
 
         # LFCC-LCNN prediction
         lfcc = extract_lfcc(waveform_np)
-        # Pad/trim time dimension to fixed length
-        T_target = 300
-        if lfcc.shape[1] >= T_target:
-            lfcc = lfcc[:, :T_target]
-        else:
-            pad = T_target - lfcc.shape[1]
-            lfcc = np.pad(lfcc, ((0, 0), (0, pad)), mode='wrap')
+        lfcc = pad_lfcc_time(lfcc)
 
         x_lfcc = torch.tensor(lfcc, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(self.device)
         out_lcnn = self.lcnn(x_lfcc)
@@ -212,15 +391,33 @@ def pad_audio(x, max_len=MAX_LEN):
 
 def main():
     parser = argparse.ArgumentParser(description='TrustCall Ensemble')
-    parser.add_argument('--mode', choices=['eval_ensemble', 'show_lfcc'],
+    parser.add_argument('--mode', choices=['eval_ensemble', 'show_lfcc', 'train_lfcc'],
                         default='eval_ensemble')
+    parser.add_argument('--data_path', default=None, help='Dataset root (required for train_lfcc)')
+    parser.add_argument('--dataset', choices=['asvspoof', 'librisevoc'], default='asvspoof')
+    parser.add_argument('--train_split', default='train')
+    parser.add_argument('--dev_split', default='dev')
     parser.add_argument('--rawnet_path', default='outputs/best_model.pth')
     parser.add_argument('--lfcc_path',   default='outputs/lfcc_model.pth')
     parser.add_argument('--config',      default='model_config_RawNet.yaml')
-    parser.add_argument('--audio',       required=True)
+    parser.add_argument('--audio',       default=None)
+    parser.add_argument('--epochs',      type=int, default=5)
+    parser.add_argument('--batch_size',  type=int, default=32)
+    parser.add_argument('--num_workers', type=int, default=0)
+    parser.add_argument('--lr',          type=float, default=1e-3)
+    parser.add_argument('--max_train_samples', type=int, default=None)
+    parser.add_argument('--max_dev_samples',   type=int, default=None)
+    parser.add_argument('--seed',        type=int, default=42)
     parser.add_argument('--rawnet_weight', type=float, default=0.6)
     parser.add_argument('--lcnn_weight',   type=float, default=0.4)
     args = parser.parse_args()
+
+    if args.mode == 'train_lfcc':
+        train_lfcc_model(args)
+        return
+
+    if not args.audio:
+        raise SystemExit('--audio is required for --mode eval_ensemble or --mode show_lfcc')
 
     device = torch.device('cpu')
 
@@ -241,14 +438,18 @@ def main():
         config = yaml.safe_load(f)
     rawnet = RawNet(config['model'], device)
     if os.path.exists(args.rawnet_path):
-        rawnet.load_state_dict(torch.load(args.rawnet_path, map_location=device))
+        state_dict = torch.load(args.rawnet_path, map_location=device)
+        missing, unexpected = rawnet.load_state_dict(state_dict, strict=False)
         print(f"  RawNet loaded: {args.rawnet_path}")
+        non_benign_missing = [k for k in missing if k not in BENIGN_MISSING_SINC]
+        if non_benign_missing or unexpected:
+            print(f"  RawNet partial load: missing={len(non_benign_missing)} unexpected={len(unexpected)}")
     rawnet.to(device)
 
     # Load / init LCNN
     lcnn = LCNN(n_lfcc=N_LFCC)
     if os.path.exists(args.lfcc_path):
-        lcnn.load_state_dict(torch.load(args.lfcc_path, map_location=device))
+        lcnn.load_state_dict(torch.load(args.lfcc_path, map_location=device), strict=False)
         print(f"  LCNN loaded: {args.lfcc_path}")
     else:
         print(f"  LCNN: no checkpoint found, using random weights")

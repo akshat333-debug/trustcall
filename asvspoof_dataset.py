@@ -52,10 +52,11 @@ class Dataset_ASVspoof2019(Dataset):
         'eval':  ('ASVspoof2019_LA_eval',  'ASVspoof2019.LA.cm.eval.trl.txt'),
     }
 
-    def __init__(self, dataset_path, split='train', resample_to=None, max_len=MAX_LEN):
+    def __init__(self, dataset_path, split='train', resample_to=None, max_len=None):
         assert split in self.SPLIT_MAP, f"split must be one of {list(self.SPLIT_MAP.keys())}"
-        self.max_len = max_len
         self.resample_to = resample_to  # if set, resample to this rate
+        effective_sr = self.resample_to or SAMPLE_RATE
+        self.max_len = max_len if max_len is not None else int(4 * effective_sr)
 
         audio_dir_name, protocol_name = self.SPLIT_MAP[split]
         audio_dir = os.path.join(dataset_path, audio_dir_name, 'flac')

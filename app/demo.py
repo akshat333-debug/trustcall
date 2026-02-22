@@ -11,6 +11,13 @@ import yaml
 import os
 import sys
 import io
+import tempfile
+
+os.environ.setdefault("XDG_CACHE_HOME", os.path.join(tempfile.gettempdir(), "trustcall-cache"))
+os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "trustcall-mpl"))
+os.makedirs(os.environ["XDG_CACHE_HOME"], exist_ok=True)
+os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
@@ -20,6 +27,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from model import RawNet
 
 st.set_page_config(page_title="TrustCall — Deepfake Voice Detector", layout="wide", page_icon="🛡️")
+BENIGN_MISSING_SINC = {'Sinc_conv.low_hz_', 'Sinc_conv.band_hz_', 'Sinc_conv.window_', 'Sinc_conv.n_'}
 
 # ── Styling ──────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -46,8 +54,14 @@ def load_model(model_path, config_path):
     device = torch.device('cpu')
     model = RawNet(config['model'], device)
     if os.path.exists(model_path):
-        model.load_state_dict(torch.load(model_path, map_location=device))
+        state_dict = torch.load(model_path, map_location=device)
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
         st.sidebar.success("✅ Model loaded")
+        non_benign_missing = [k for k in missing if k not in BENIGN_MISSING_SINC]
+        if non_benign_missing or unexpected:
+            st.sidebar.info(
+                f"Checkpoint partially loaded (missing={len(non_benign_missing)}, unexpected={len(unexpected)})"
+            )
     else:
         st.sidebar.warning("⚠️ No checkpoint found — using random weights")
     model.eval()
@@ -81,7 +95,7 @@ def run_inference(waveform_np, sr):
     vocoder_probs = torch.exp(out_multi[0]).cpu().numpy()
     return prob_fake, vocoder_probs
 
-VOCODER_NAMES = ["Original", "WaveGlow", "MelGAN", "HiFiGAN", "WaveNet", "WaveRNN", "PWG"]
+VOCODER_NAMES = ["gt", "wavegrad", "diffwave", "parallel_wave_gan", "wavernn", "wavenet", "melgan"]
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab1, tab2 = st.tabs(["🎵 Upload Audio", "📊 About"])

@@ -9,10 +9,17 @@ Usage:
 import argparse
 import json
 import os
+import tempfile
 import numpy as np
-import matplotlib.pyplot as plt
+
+os.environ.setdefault("XDG_CACHE_HOME", os.path.join(tempfile.gettempdir(), "trustcall-cache"))
+os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "trustcall-mpl"))
+os.makedirs(os.environ["XDG_CACHE_HOME"], exist_ok=True)
+os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+
 import matplotlib
 matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 from sklearn.metrics import (
     confusion_matrix, roc_curve, auc,
     ConfusionMatrixDisplay, classification_report
@@ -92,7 +99,7 @@ def generate_all_plots(preds_json, out_dir, threshold=0.5):
     print(f"{'='*50}")
     print(f"  Samples: {len(y_true)} | Threshold: {threshold}")
     print(f"\n  Classification Report:")
-    print(classification_report(y_true, y_pred, target_names=['Real', 'Fake']))
+    print(classification_report(y_true, y_pred, target_names=['Real', 'Fake'], zero_division=0))
 
     eer, eer_thresh, fpr, tpr = compute_eer(y_true, y_score)
     roc_auc = auc(fpr, tpr)
@@ -118,7 +125,7 @@ def generate_all_plots(preds_json, out_dir, threshold=0.5):
     return summary
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(description='TrustCall Evaluation Visualizer')
     parser.add_argument('--preds_json', required=True,
                         help='Path to predictions JSON (keys: labels, scores)')
@@ -128,3 +135,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     generate_all_plots(args.preds_json, args.out_dir, args.threshold)
+
+
+if __name__ == '__main__':
+    main()

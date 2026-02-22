@@ -3,9 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 import numpy as np
-from torch.utils import data
+import copy
 from collections import OrderedDict
-from torch.nn.parameter import Parameter
 
 
 class SincConv(nn.Module):
@@ -18,66 +17,115 @@ class SincConv(nn.Module):
         return 700 * (10 ** (mel / 2595) - 1)
 
 
-    def __init__(self, device,out_channels, kernel_size,in_channels=1,sample_rate=24000,
-                 stride=1, padding=0, dilation=1, bias=False, groups=1):
+    def __init__(
+        self,
+        device,
+        out_channels,
+        kernel_size,
+        in_channels=1,
+        sample_rate=24000,
+        stride=1,
+        padding=0,
+        dilation=1,
+        bias=False,
+        groups=1,
+    ):
 
-        super(SincConv,self).__init__()
+        super(SincConv, self).__init__()
 
         if in_channels != 1:
-            
             msg = "SincConv only support one input channel (here, in_channels = {%i})" % (in_channels)
             raise ValueError(msg)
-        
+
         self.out_channels = out_channels
         self.kernel_size = kernel_size
-        self.sample_rate=sample_rate
+        self.sample_rate = sample_rate
+        self.min_low_hz = 30.0
+        self.min_band_hz = 50.0
 
-        # Forcing the filters to be odd (i.e, perfectly symmetrics)
-        if kernel_size%2==0:
-            self.kernel_size=self.kernel_size+1
+        # Force odd kernel size for symmetric filters.
+        if kernel_size % 2 == 0:
+            self.kernel_size = self.kernel_size + 1
 
-        self.device=device   
+        self.device = device
         self.stride = stride
         self.padding = padding
         self.dilation = dilation
-        
-        if bias:
-            raise ValueError('SincConv does not support bias.')
-        if groups > 1:
-            raise ValueError('SincConv does not support groups.')
-        
-        
-        # initialize filterbanks using Mel scale
-        NFFT = 512
-        f=int(self.sample_rate/2)*np.linspace(0,1,int(NFFT/2)+1)
-        fmel=self.to_mel(f)   # Hz to mel conversion
-        fmelmax=np.max(fmel)
-        fmelmin=np.min(fmel)
-        filbandwidthsmel=np.linspace(fmelmin,fmelmax,self.out_channels+1)
-        filbandwidthsf=self.to_hz(filbandwidthsmel)  # Mel to Hz conversion
-        self.mel=filbandwidthsf
-        self.hsupp=torch.arange(-(self.kernel_size-1)/2, (self.kernel_size-1)/2+1)
-        self.band_pass=torch.zeros(self.out_channels,self.kernel_size)
-    
-       
-        
-    def forward(self,x):
-        for i in range(len(self.mel)-1):
-            fmin=self.mel[i]
-            fmax=self.mel[i+1]
-            hHigh=(2*fmax/self.sample_rate)*np.sinc(2*fmax*self.hsupp/self.sample_rate)
-            hLow=(2*fmin/self.sample_rate)*np.sinc(2*fmin*self.hsupp/self.sample_rate)
-            hideal=hHigh-hLow
-            
-            self.band_pass[i,:]=Tensor(np.hamming(self.kernel_size))*Tensor(hideal)
-        
-        band_pass_filter=self.band_pass.to(self.device)
 
-        self.filters = (band_pass_filter).view(self.out_channels, 1, self.kernel_size)
-        
-        return F.conv1d(x, self.filters, stride=self.stride,
-                        padding=self.padding, dilation=self.dilation,
-                         bias=None, groups=1)
+        if bias:
+            raise ValueError("SincConv does not support bias.")
+        if groups > 1:
+            raise ValueError("SincConv does not support groups.")
+
+        # Initialize filterbanks using Mel spacing.
+        low_hz = 0
+        high_hz = self.sample_rate / 2
+        mel = np.linspace(self.to_mel(low_hz), self.to_mel(high_hz), self.out_channels + 1)
+        hz = self.to_hz(mel)
+
+        # Learnable low cutoff and bandwidth for each filter.
+        self.low_hz_ = nn.Parameter(torch.tensor(hz[:-1], dtype=torch.float32).view(-1, 1))
+        self.band_hz_ = nn.Parameter(torch.tensor(np.diff(hz), dtype=torch.float32).view(-1, 1))
+
+        half = (self.kernel_size - 1) // 2
+        n_lin = torch.arange(0, half, dtype=torch.float32)
+
+        # Hamming window and negative time axis buffers used to build symmetric kernels.
+        self.register_buffer(
+            "window_",
+            0.54 - 0.46 * torch.cos(2 * np.pi * n_lin / self.kernel_size),
+        )
+        self.register_buffer(
+            "n_",
+            (2 * np.pi * torch.arange(-half, 0, dtype=torch.float32).view(1, -1))
+            / self.sample_rate,
+        )
+
+        # Kept as a public attribute for explainability scripts.
+        self.mel = hz
+
+    def forward(self, x):
+        device = x.device
+        dtype = x.dtype
+
+        low = self.min_low_hz + torch.abs(self.low_hz_)
+        high = torch.clamp(
+            low + self.min_band_hz + torch.abs(self.band_hz_),
+            self.min_low_hz,
+            self.sample_rate / 2,
+        )
+        band = (high - low)[:, 0]
+
+        n_ = self.n_.to(device=device, dtype=dtype)
+        window_ = self.window_.to(device=device, dtype=dtype)
+
+        f_times_t_low = torch.matmul(low.to(dtype=dtype), n_)
+        f_times_t_high = torch.matmul(high.to(dtype=dtype), n_)
+
+        band_pass_left = (
+            (torch.sin(f_times_t_high) - torch.sin(f_times_t_low)) / (n_ / 2)
+        ) * window_
+        band_pass_center = 2 * band.view(-1, 1)
+        band_pass_right = torch.flip(band_pass_left, dims=[1])
+
+        band_pass = torch.cat([band_pass_left, band_pass_center, band_pass_right], dim=1)
+        band_pass = band_pass / (2 * band[:, None] + 1e-12)
+
+        # Update frequency edges for explainability visualizations.
+        with torch.no_grad():
+            self.mel = torch.cat([low[:, 0], high[-1:, 0]], dim=0).cpu().numpy()
+
+        filters = band_pass.view(self.out_channels, 1, self.kernel_size)
+
+        return F.conv1d(
+            x,
+            filters,
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            bias=None,
+            groups=1,
+        )
 
 
         
@@ -124,7 +172,7 @@ class Residual_block(nn.Module):
         else:
             out = x
             
-        out = self.conv1(x)
+        out = self.conv1(out)
         out = self.bn2(out)
         out = self.lrelu(out)
         out = self.conv2(out)
@@ -143,6 +191,7 @@ class Residual_block(nn.Module):
 class RawNet(nn.Module):
     def __init__(self, d_args, device):
         super(RawNet, self).__init__()
+        d_args = copy.deepcopy(d_args)
 
         
         self.device=device
@@ -290,7 +339,8 @@ class RawNet(nn.Module):
         return nn.Sequential(*layers)
 
     def summary(self, input_size, batch_size=-1, device="cuda", print_fn = None):
-        if print_fn == None: printfn = print
+        if print_fn is None:
+            print_fn = print
         model = self
         
         def register_hook(module):

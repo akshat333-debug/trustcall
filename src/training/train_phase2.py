@@ -1,55 +1,20 @@
-import os
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-from src.utils.config import load_config
-from src.models.resnet_bilstm import ResNetBiLSTM
-from src.data.asvspoof_dataset import ASVSpoofDataset
-from src.training.trainer import Trainer
+"""Legacy entrypoint retained for compatibility.
+
+The project now uses the RawNet training track at the repository root.
+Use `python main.py ...` for LibriSeVoc or `python train_rawnet.py ...`
+for ASVspoof-focused training.
+"""
+
 
 def main():
-    # 1. Load Config (Reuse fuzzy config for model params)
-    config = load_config('configs/deepvoice_fuzzy.yaml')
-    
-    # Update for Phase 2
-    config['training']['batch_size'] = 32 # Reduce batch size for larger images/stability? Or keep 32.
-    config['training']['learning_rate'] = 1e-4
-    config['training']['num_epochs'] = 10 
-    
-    device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
-    print(f"Using device: {device}")
+    msg = (
+        "Legacy script deprecated: src/training/train_phase2.py\n"
+        "Use RawNet scripts instead:\n"
+        "  1) python main.py --data_path /path/to/LibriSeVoc --model_save_path ./outputs\n"
+        "  2) python train_rawnet.py --data_path \"data/ASVspoof 2019 Dataset 2/LA/LA\" --out_dir outputs\n"
+    )
+    print(msg)
 
-    # 2. Datasets (Large Scale)
-    # User path: /Users/agraw/Desktop/sem 6/trustcall/data/ASVspoof 2019 Dataset 2/LA/LA
-    base_dir = '/Users/agraw/Desktop/sem 6/trustcall/data/ASVspoof 2019 Dataset 2/LA/LA'
-    
-    print("Initializing Phase 2 Datasets...")
-    train_dataset = ASVSpoofDataset(base_dir, partition='train')
-    dev_dataset = ASVSpoofDataset(base_dir, partition='dev')
-    
-    print(f"Training Samples: {len(train_dataset)}")
-    print(f"Validation Samples: {len(dev_dataset)}")
-    
-    # 3. DataLoaders
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4)
-    dev_loader = DataLoader(dev_dataset, batch_size=32, shuffle=False, num_workers=4)
-    
-    # 4. Model
-    model = ResNetBiLSTM(config).to(device)
-
-    # Resume from checkpoint if exists (Logic added for Phase 2 continuity)
-    checkpoint_path = os.path.join(config['training']['output_dir'], "best_model.pth")
-    if os.path.exists(checkpoint_path):
-        print(f"Resuming from checkpoint: {checkpoint_path}")
-        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
-    
-    # 6. Trainer
-    trainer = Trainer(model, config, device)
-    
-    # 7. Run
-    print("Starting Phase 2 Training...")
-    trainer.run(train_loader, dev_loader)
 
 if __name__ == "__main__":
     main()

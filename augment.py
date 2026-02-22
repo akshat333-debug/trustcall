@@ -130,7 +130,14 @@ class AugmentedDataset(Dataset):
         return len(self.base_dataset)
 
     def __getitem__(self, idx):
-        x, label = self.base_dataset[idx]
+        sample = self.base_dataset[idx]
+        if isinstance(sample, (list, tuple)) and len(sample) == 3:
+            x, y_multi, y_binary = sample
+            label = y_multi
+            passthrough = (y_multi, y_binary)
+        else:
+            x, label = sample
+            passthrough = None
 
         # Convert to numpy for augmentation
         x_np = x.numpy() if isinstance(x, torch.Tensor) else np.array(x)
@@ -148,7 +155,10 @@ class AugmentedDataset(Dataset):
         max_val = np.max(np.abs(x_np)) + 1e-9
         x_np = x_np / max_val
 
-        return torch.tensor(x_np, dtype=torch.float32), label
+        x_tensor = torch.tensor(x_np, dtype=torch.float32)
+        if passthrough is None:
+            return x_tensor, label
+        return x_tensor, passthrough[0], passthrough[1]
 
 
 # ── Demo / Test ───────────────────────────────────────────────────────────────
