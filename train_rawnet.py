@@ -1,10 +1,11 @@
 """
 Fast RawNet training with pre-cached audio for speed.
-Pre-loads all audio into RAM as numpy arrays, then trains fast.
+(Updated for memory-constrained environments like 8GB M3)
+Streams audio dynamically from disk on-the-fly to prevent RAM overflow.
 
 Usage:
     python train_rawnet.py --data_path "data/ASVspoof 2019 Dataset 2/LA/LA" \
-                           --epochs 10 --batch_size 32
+                           --epochs 100 --batch_size 32
 """
 
 import argparse
@@ -15,7 +16,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, TensorDataset
+from torch.utils.data import Dataset, DataLoader
 import librosa
 import yaml
 from tqdm import tqdm
@@ -70,74 +71,80 @@ def stratified_sample(samples, labels, n_real, n_fake, seed=42):
     return [samples[i] for i in chosen], [labels[i] for i in chosen]
 
 
-def preload_audio(file_paths, labels, desc='Loading'):
-    """Pre-load all audio into RAM as numpy float32 arrays."""
-    X, Y = [], []
-    for fpath, label in tqdm(zip(file_paths, labels), total=len(file_paths), desc=f'  {desc}'):
+class ASVspoofDataset(Dataset):
+    def __init__(self, file_paths, labels, max_len=MAX_LEN):
+        self.file_paths = file_paths
+        self.labels = labels
+        self.max_len = max_len
+
+    def __len__(self):
+        return len(self.file_paths)
+
+    def __getitem__(self, idx):
+        fpath = self.file_paths[idx]
+        label = self.labels[idx]
         try:
             y, sr = librosa.load(fpath, sr=None, mono=True)
             if sr != SAMPLE_RATE:
                 y = librosa.resample(y, orig_sr=sr, target_sr=SAMPLE_RATE)
-            y = pad_or_trim(y)
-            X.append(y)
-            Y.append(label)
-        except Exception as e:
-            pass  # skip corrupt files
-    return np.array(X, dtype=np.float32), np.array(Y, dtype=np.int64)
+            y = pad_or_trim(y, self.max_len)
+        except Exception:
+            # Fallback for corrupt files
+            y = np.zeros(self.max_len, dtype=np.float32)
+        
+        return torch.tensor(y, dtype=torch.float32), torch.tensor(label, dtype=torch.int64)
 
 
-def train_epoch(model, X_t, Y_t, optimizer, criterion, device, batch_size=32):
+def train_epoch(model, dataloader, optimizer, criterion, device):
     model.train()
-    n = len(X_t)
-    idx = torch.randperm(n)
-    total_loss, correct = 0.0, 0
-
-    for start in range(0, n, batch_size):
-        batch_idx = idx[start:start + batch_size]
-        x = X_t[batch_idx].to(device)
-        y = Y_t[batch_idx].to(device)
-
+    total_loss, correct, total = 0.0, 0, 0
+    
+    pbar = tqdm(dataloader, desc="  Training", leave=False)
+    for x, y in pbar:
+        x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
         out_binary, out_multi = model(x)
-        # ASVspoof provides binary labels only (0=real, 1=fake).
-        # Use the binary head as the supervised objective.
         loss = criterion(out_binary, y)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
 
-        total_loss += loss.item()
-        correct    += (out_binary.argmax(1) == y).sum().item()
+        batch_size = x.size(0)
+        total_loss += loss.item() * batch_size
+        correct += (out_binary.argmax(1) == y).sum().item()
+        total += batch_size
 
-    return total_loss / (n / batch_size), correct / n
+    return total_loss / total, correct / total
 
 
 @torch.no_grad()
-def eval_epoch(model, X_t, Y_t, criterion, device, batch_size=64):
+def eval_epoch(model, dataloader, criterion, device):
     model.eval()
-    n = len(X_t)
-    total_loss, correct = 0.0, 0
+    total_loss, correct, total = 0.0, 0, 0
     all_scores, all_labels = [], []
 
-    for start in range(0, n, batch_size):
-        x = X_t[start:start + batch_size].to(device)
-        y = Y_t[start:start + batch_size].to(device)
+    pbar = tqdm(dataloader, desc="  Evaluating", leave=False)
+    for x, y in pbar:
+        x, y = x.to(device), y.to(device)
         out_binary, _ = model(x)
         loss = criterion(out_binary, y)
-        total_loss += loss.item()
-        correct    += (out_binary.argmax(1) == y).sum().item()
+        
+        batch_size = x.size(0)
+        total_loss += loss.item() * batch_size
+        correct += (out_binary.argmax(1) == y).sum().item()
+        total += batch_size
+        
         probs = torch.exp(out_binary)
         all_scores.extend(probs[:, 1].cpu().numpy())
         all_labels.extend(y.cpu().numpy())
 
-    acc = correct / n
-    # EER
+    acc = correct / total
     from sklearn.metrics import roc_curve
     fpr, tpr, _ = roc_curve(all_labels, all_scores, pos_label=1)
     fnr = 1 - tpr
     eer_idx = np.nanargmin(np.abs(fnr - fpr))
     eer = (fpr[eer_idx] + fnr[eer_idx]) / 2
-    return total_loss / (n / batch_size), acc, eer
+    return total_loss / total, acc, eer
 
 
 def main():
@@ -145,13 +152,13 @@ def main():
     parser.add_argument('--data_path',   default='data/ASVspoof 2019 Dataset 2/LA/LA')
     parser.add_argument('--config',      default='model_config_RawNet.yaml')
     parser.add_argument('--out_dir',     default='outputs')
-    parser.add_argument('--epochs',      type=int,   default=10)
+    parser.add_argument('--epochs',      type=int,   default=100)
     parser.add_argument('--batch_size',  type=int,   default=32)
     parser.add_argument('--lr',          type=float, default=0.0001)
-    parser.add_argument('--n_real',      type=int,   default=500,  help='# real train samples')
-    parser.add_argument('--n_fake',      type=int,   default=1500, help='# fake train samples')
-    parser.add_argument('--n_dev_real',  type=int,   default=200)
-    parser.add_argument('--n_dev_fake',  type=int,   default=600)
+    parser.add_argument('--n_real',      type=int,   default=None,  help='Max real train samples (None=all)')
+    parser.add_argument('--n_fake',      type=int,   default=None,  help='Max fake train samples (None=all)')
+    parser.add_argument('--n_dev_real',  type=int,   default=None)
+    parser.add_argument('--n_dev_fake',  type=int,   default=None)
     parser.add_argument('--seed',        type=int,   default=42)
     args = parser.parse_args()
 
@@ -159,65 +166,73 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    # Use MPS if available, else CPU
     if torch.backends.mps.is_available():
         device = torch.device('mps')
+    elif torch.cuda.is_available():
+        device = torch.device('cuda')
     else:
         device = torch.device('cpu')
 
     print(f"\n{'='*55}")
-    print(f"  TrustCall — RawNet Fast Training")
+    print(f"  TrustCall — RawNet Full On-the-Fly Training")
     print(f"{'='*55}")
     print(f"  Device : {device}")
     print(f"  Epochs : {args.epochs}  |  Batch: {args.batch_size}  |  LR: {args.lr}")
-    print(f"  Train  : {args.n_real} real + {args.n_fake} fake = {args.n_real+args.n_fake} total")
-    print(f"  Dev    : {args.n_dev_real} real + {args.n_dev_fake} fake")
 
     with open(args.config) as f:
         config = yaml.safe_load(f)
 
-    print("\n  Selecting samples...")
+    print("\n  Indexing files...")
     tr_files, tr_labels = load_protocol(args.data_path, 'train')
     dv_files, dv_labels = load_protocol(args.data_path, 'dev')
 
-    tr_files, tr_labels = stratified_sample(tr_files, tr_labels, args.n_real, args.n_fake, args.seed)
-    dv_files, dv_labels = stratified_sample(dv_files, dv_labels, args.n_dev_real, args.n_dev_fake, args.seed)
+    if args.n_real is not None or args.n_fake is not None:
+        tr_files, tr_labels = stratified_sample(tr_files, tr_labels, args.n_real or 999999, args.n_fake or 999999, args.seed)
+    if args.n_dev_real is not None or args.n_dev_fake is not None:
+        dv_files, dv_labels = stratified_sample(dv_files, dv_labels, args.n_dev_real or 999999, args.n_dev_fake or 999999, args.seed)
 
-    print(f"\n  Pre-loading train audio ({len(tr_files)} files)...")
-    X_train, Y_train = preload_audio(tr_files, tr_labels, 'Train')
-    print(f"  Pre-loading dev audio ({len(dv_files)} files)...")
-    X_dev, Y_dev     = preload_audio(dv_files, dv_labels, 'Dev  ')
+    print(f"  Train : {len(tr_files)} samples")
+    print(f"  Dev   : {len(dv_files)} samples")
 
-    # Move to tensors (keep on CPU, move batches to device during training)
-    X_train = torch.tensor(X_train)
-    Y_train = torch.tensor(Y_train)
-    X_dev   = torch.tensor(X_dev)
-    Y_dev   = torch.tensor(Y_dev)
+    tr_dataset = ASVspoofDataset(tr_files, tr_labels)
+    dv_dataset = ASVspoofDataset(dv_files, dv_labels)
 
-    print(f"\n  Train tensor: {X_train.shape}  Dev tensor: {X_dev.shape}")
+    # num_workers=0 is crucial for 8GB RAM to prevent multiprocessing memory leaks
+    tr_loader = DataLoader(tr_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0)
+    dv_loader = DataLoader(dv_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
 
     model = RawNet(config['model'], device).to(device)
+    
+    # Optional: Load best model checkpoint if it exists to resume
+    best_path = os.path.join(args.out_dir, 'best_model.pth')
+    if os.path.exists(best_path):
+        print(f"  Existing checkpoint found: {best_path} (Starting fresh to avoid overwriting unless intended, use carefully!)")
+
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     criterion = nn.NLLLoss()
 
     os.makedirs(args.out_dir, exist_ok=True)
     best_eer  = float('inf')
-    best_path = os.path.join(args.out_dir, 'best_model.pth')
 
     print(f"\n  {'Epoch':>5}  {'Tr Loss':>8}  {'Tr Acc':>7}  {'Dv Loss':>8}  {'Dv Acc':>7}  {'EER':>6}")
     print(f"  {'-'*50}")
 
     for epoch in range(1, args.epochs + 1):
-        tr_loss, tr_acc = train_epoch(model, X_train, Y_train, optimizer, criterion, device, args.batch_size)
-        dv_loss, dv_acc, eer = eval_epoch(model, X_dev, Y_dev, criterion, device, args.batch_size)
+        tr_loss, tr_acc = train_epoch(model, tr_loader, optimizer, criterion, device)
+        dv_loss, dv_acc, eer = eval_epoch(model, dv_loader, criterion, device)
         scheduler.step()
 
         marker = ' ✓' if eer < best_eer else ''
         print(f"  {epoch:>5}  {tr_loss:>8.4f}  {tr_acc:>7.4f}  {dv_loss:>8.4f}  {dv_acc:>7.4f}  {eer:>6.4f}{marker}")
 
+        # Always explicitly save the latest epoch as a backup
+        epoch_path = os.path.join(args.out_dir, f'model_epoch_{epoch}.pth')
+        torch.save(model.state_dict(), epoch_path)
+
         if eer < best_eer:
             best_eer = eer
+            # Overwrite the best_model.pth
             torch.save(model.state_dict(), best_path)
 
     print(f"\n  ✅ Training complete! Best EER: {best_eer:.4f}")
