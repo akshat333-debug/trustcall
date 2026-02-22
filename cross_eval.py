@@ -69,7 +69,7 @@ def compute_eer(labels, scores):
 
 
 @torch.no_grad()
-def evaluate_loader(model, loader, device):
+def evaluate_loader(model, loader, device, invert_labels=False):
     """Run model on a DataLoader, return labels and fake scores."""
     all_labels, all_scores = [], []
     model.eval()
@@ -82,12 +82,16 @@ def evaluate_loader(model, loader, device):
         y = y.to(device)
         out_binary, _ = model(x)
         probs = torch.exp(out_binary)
-        all_scores.extend(probs[:, 1].cpu().numpy().tolist())
+        if invert_labels:
+            # For csun22 weights: output 0 is Fake, output 1 is Real
+            all_scores.extend(probs[:, 0].cpu().numpy().tolist())
+        else:
+            all_scores.extend(probs[:, 1].cpu().numpy().tolist())
         all_labels.extend(y.cpu().numpy().tolist())
     return np.array(all_labels), np.array(all_scores)
 
 
-def run_cross_eval(model, device, datasets: dict, out_dir: str):
+def run_cross_eval(model, device, datasets: dict, out_dir: str, invert_labels: bool = False):
     """
     Evaluate model on all provided datasets.
     datasets: {'name': DataLoader, ...}
@@ -98,7 +102,7 @@ def run_cross_eval(model, device, datasets: dict, out_dir: str):
 
     for name, loader in datasets.items():
         print(f"\n  Evaluating on: {name}")
-        labels, scores = evaluate_loader(model, loader, device)
+        labels, scores = evaluate_loader(model, loader, device, invert_labels)
         eer, eer_thresh = compute_eer(labels, scores)
 
         from sklearn.metrics import roc_auc_score, accuracy_score
@@ -179,12 +183,18 @@ def main():
     parser.add_argument('--librisevoc_path', default=None, help='Path to LibriSeVoc')
     parser.add_argument('--batch_size',      type=int, default=16)
     parser.add_argument('--num_workers',     type=int, default=0)
-    parser.add_argument('--max_samples_per_set', type=int, default=None,
-                        help='Optional cap per evaluation split for quick smoke runs')
+    parser.add_argument('--max_samples_per_set', type=int, default=None, help='Optional cap per evaluation split')
     parser.add_argument('--out_dir',         default='outputs/cross_eval')
+    parser.add_argument('--invert_labels',   action='store_true', help='Specific for csun22 weights: they output class 0=Fake, 1=Real.')
     args = parser.parse_args()
 
-    device = torch.device('cpu')
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
+    print(f"  Using device: {device}")
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
 
@@ -227,7 +237,7 @@ def main():
         print("  No datasets found. Provide --asvspoof_path and/or --librisevoc_path")
         return
 
-    run_cross_eval(model, device, datasets, args.out_dir)
+    run_cross_eval(model, device, datasets, args.out_dir, args.invert_labels)
 
 
 if __name__ == '__main__':
