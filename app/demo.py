@@ -12,6 +12,8 @@ import os
 import sys
 import io
 import tempfile
+import soundfile as sf
+import augment
 
 os.environ.setdefault("XDG_CACHE_HOME", os.path.join(tempfile.gettempdir(), "trustcall-cache"))
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "trustcall-mpl"))
@@ -83,6 +85,14 @@ model_path = st.sidebar.text_input("Model Path", default_model)
 config_path = st.sidebar.text_input("Config Path", default_config)
 threshold = st.sidebar.slider("Detection Threshold", 0.0, 1.0, 0.5, 0.01)
 
+st.sidebar.markdown("---")
+st.sidebar.header("🌪️ Robustness Testing")
+st.sidebar.markdown("Test model resilience by corrupting the audio:")
+add_noise = st.sidebar.checkbox("Add Background Noise")
+add_reverb = st.sidebar.checkbox("Add Room Reverb")
+add_compress = st.sidebar.checkbox("Simulate Codec Compression")
+add_pitch = st.sidebar.checkbox("Apply Pitch Shift")
+
 try:
     model, device = load_model(model_path, config_path)
 except Exception as e:
@@ -135,6 +145,7 @@ with tab1:
     uploaded = st.file_uploader("Upload a WAV or FLAC file", type=["wav", "flac"])
 
     if uploaded:
+        st.markdown("**Original Audio**")
         st.audio(uploaded)
         uploaded.seek(0)
         
@@ -148,7 +159,27 @@ with tab1:
             waveform_np, sr = librosa.load(tmp_path, sr=None, mono=True)
             if sr != SAMPLE_RATE:
                 waveform_np = librosa.resample(waveform_np, orig_sr=sr, target_sr=SAMPLE_RATE)
+            
+            # Apply Augmentations if selected
+            is_corrupted = add_noise or add_reverb or add_compress or add_pitch
+            if add_noise:
+                waveform_np = augment.add_gaussian_noise(waveform_np)
+            if add_reverb:
+                waveform_np = augment.apply_room_reverb(waveform_np, SAMPLE_RATE)
+            if add_compress:
+                waveform_np = augment.apply_codec_compression(waveform_np, SAMPLE_RATE)
+            if add_pitch:
+                waveform_np = augment.apply_pitch_shift(waveform_np, SAMPLE_RATE)
+                
             waveform_np = pad_audio(waveform_np)
+            
+            # Allow user to listen to the corrupted version
+            if is_corrupted:
+                st.markdown("**Corrupted Audio (Testing Robustness)**")
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_aug:
+                    sf.write(tmp_aug.name, waveform_np, SAMPLE_RATE)
+                    st.audio(tmp_aug.name)
+                    
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
@@ -234,7 +265,15 @@ with tab3:
     - **Test Dataset:** ASVspoof 2019 Logical Access
     - **Test Accuracy:** 95.20%
     - **Equal Error Rate (EER):** 4.19% (Beating state-of-the-art from CVPR 2023)
-
+    """)
+    
+    st.markdown("### Model Evaluation Charts")
+    st.markdown("Here is the Cross-Dataset Generalization plot generated automatically by the `visualize.py` extension:")
+    chart_path = os.path.join(PROJECT_ROOT, "outputs", "cross_eval", "cross_eval_chart.png")
+    if os.path.exists(chart_path):
+        st.image(chart_path, caption="ASVspoof 2019 Eval Cross-dataset Results", use_container_width=True)
+        
+    st.markdown("""
     ### Reference
     > Sun et al., *AI-Synthesized Voice Detection Using Neural Vocoder Artifacts*, CVPRW 2023
     """)
