@@ -207,78 +207,78 @@ with tab1:
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_aug:
                     sf.write(tmp_aug.name, waveform_np, SAMPLE_RATE)
                     st.audio(tmp_aug.name)
-                    
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Waveform**")
+                fig, ax = plt.subplots(figsize=(8, 2))
+                ax.plot(waveform_np, color='#4c8bf5', linewidth=0.5)
+                ax.set_facecolor('#1e2130'); fig.patch.set_facecolor('#1e2130')
+                ax.tick_params(colors='white'); ax.spines[:].set_color('#444')
+                st.pyplot(fig); plt.close()
+
+            with col2:
+                st.markdown("**Mel Spectrogram**")
+                mel = librosa.feature.melspectrogram(y=waveform_np, sr=SAMPLE_RATE, n_mels=80)
+                fig, ax = plt.subplots(figsize=(8, 2))
+                ax.imshow(np.log(mel + 1e-6), aspect='auto', origin='lower', cmap='magma')
+                ax.set_facecolor('#1e2130'); fig.patch.set_facecolor('#1e2130')
+                st.pyplot(fig); plt.close()
+
+            st.divider()
+            st.subheader("🔍 Deep Neural Analysis")
+            
+            # Display Lottie Animation while analyzing
+            anim_col, text_col = st.columns([1, 4])
+            with anim_col:
+                if lottie_scanning:
+                    st_lottie(lottie_scanning, height=100, key="scanning")
+            with text_col:
+                result_placeholder = st.empty()
+                with result_placeholder.container():
+                    st.info("Extracting Whisper transcription & running SincConv Voice Activity neural detection...")
+                
+                # Step 1: Run Whisper
+                whisper_model = load_whisper_model()
+                transcription_result = whisper_model.transcribe(tmp_path)
+                transcription_text = transcription_result["text"].strip()
+                
+                # Step 2: Run RawNet Detection
+                prob_real, prob_fake, vocoder_probs = run_inference(waveform_np, SAMPLE_RATE)
+                
+                result_placeholder.empty()
+
+            st.subheader("📝 Whisper Transcription")
+            st.markdown(f"> *\"{transcription_text}\"*")
+            
+            st.divider()
+            st.subheader("🛡️ Detection Result")
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Fake Probability", f"{prob_fake:.1%}")
+            c2.metric("Real Probability", f"{prob_real:.1%}")
+            c3.metric("Threshold", f"{threshold:.2f}")
+
+            if prob_fake > threshold:
+                st.markdown(f'<p class="risk-high">🚨 DEEPFAKE DETECTED ({prob_fake:.1%})</p>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<p class="risk-low">✅ LIKELY GENUINE ({prob_real:.1%})</p>', unsafe_allow_html=True)
+
+            st.markdown("**Vocoder Attribution (which synthesizer?)**")
+            fig, ax = plt.subplots(figsize=(10, 3))
+            colors = ['#21c354' if i == 0 else '#ff4b4b' for i in range(7)]
+            bars = ax.bar(VOCODER_NAMES, vocoder_probs, color=colors)
+            ax.set_ylabel("Probability", color='white')
+            ax.set_facecolor('#1e2130'); fig.patch.set_facecolor('#1e2130')
+            ax.tick_params(colors='white'); ax.spines[:].set_color('#444')
+            for bar, val in zip(bars, vocoder_probs):
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                        f'{val:.2f}', ha='center', color='white', fontsize=9)
+            st.pyplot(fig); plt.close()
+
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**Waveform**")
-            fig, ax = plt.subplots(figsize=(8, 2))
-            ax.plot(waveform_np, color='#4c8bf5', linewidth=0.5)
-            ax.set_facecolor('#1e2130'); fig.patch.set_facecolor('#1e2130')
-            ax.tick_params(colors='white'); ax.spines[:].set_color('#444')
-            st.pyplot(fig); plt.close()
-
-        with col2:
-            st.markdown("**Mel Spectrogram**")
-            mel = librosa.feature.melspectrogram(y=waveform_np, sr=SAMPLE_RATE, n_mels=80)
-            fig, ax = plt.subplots(figsize=(8, 2))
-            ax.imshow(np.log(mel + 1e-6), aspect='auto', origin='lower', cmap='magma')
-            ax.set_facecolor('#1e2130'); fig.patch.set_facecolor('#1e2130')
-            st.pyplot(fig); plt.close()
-
-        st.divider()
-        st.subheader("🔍 Deep Neural Analysis")
-        
-        # Display Lottie Animation while analyzing
-        anim_col, text_col = st.columns([1, 4])
-        with anim_col:
-            if lottie_scanning:
-                st_lottie(lottie_scanning, height=100, key="scanning")
-        with text_col:
-            result_placeholder = st.empty()
-            with result_placeholder.container():
-                st.info("Extracting Whisper transcription & running SincConv Voice Activity neural detection...")
-            
-            # Step 1: Run Whisper
-            whisper_model = load_whisper_model()
-            transcription_result = whisper_model.transcribe(tmp_path)
-            transcription_text = transcription_result["text"].strip()
-            
-            # Step 2: Run RawNet Detection
-            prob_real, prob_fake, vocoder_probs = run_inference(waveform_np, SAMPLE_RATE)
-            
-            result_placeholder.empty()
-
-        st.subheader("📝 Whisper Transcription")
-        st.markdown(f"> *\"{transcription_text}\"*")
-        
-        st.divider()
-        st.subheader("🛡️ Detection Result")
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Fake Probability", f"{prob_fake:.1%}")
-        c2.metric("Real Probability", f"{prob_real:.1%}")
-        c3.metric("Threshold", f"{threshold:.2f}")
-
-        if prob_fake > threshold:
-            st.markdown(f'<p class="risk-high">🚨 DEEPFAKE DETECTED ({prob_fake:.1%})</p>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<p class="risk-low">✅ LIKELY GENUINE ({prob_real:.1%})</p>', unsafe_allow_html=True)
-
-        st.markdown("**Vocoder Attribution (which synthesizer?)**")
-        fig, ax = plt.subplots(figsize=(10, 3))
-        colors = ['#21c354' if i == 0 else '#ff4b4b' for i in range(7)]
-        bars = ax.bar(VOCODER_NAMES, vocoder_probs, color=colors)
-        ax.set_ylabel("Probability", color='white')
-        ax.set_facecolor('#1e2130'); fig.patch.set_facecolor('#1e2130')
-        ax.tick_params(colors='white'); ax.spines[:].set_color('#444')
-        for bar, val in zip(bars, vocoder_probs):
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                    f'{val:.2f}', ha='center', color='white', fontsize=9)
-        st.pyplot(fig); plt.close()
 
 with tab2:
     st.markdown("## 🧠 Explainable AI (XAI) Analysis")
