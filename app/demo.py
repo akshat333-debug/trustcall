@@ -43,27 +43,35 @@ st.markdown("""
 st.title("🛡️ TrustCall — Deepfake Voice Detector")
 st.markdown("*Detecting AI-synthesized voices via neural vocoder artifact analysis*")
 
-SAMPLE_RATE = 24000
-MAX_LEN = 96000
+SAMPLE_RATE = 16000
+MAX_LEN = 64000
 
 # ── Load Model ────────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_model(model_path, config_path):
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Config file not found: {config_path}")
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     device = torch.device('cpu')
     model = RawNet(config['model'], device)
-    if os.path.exists(model_path):
-        state_dict = torch.load(model_path, map_location=device)
-        missing, unexpected = model.load_state_dict(state_dict, strict=False)
-        st.sidebar.success("✅ Model loaded")
-        non_benign_missing = [k for k in missing if k not in BENIGN_MISSING_SINC]
-        if non_benign_missing or unexpected:
-            st.sidebar.info(
-                f"Checkpoint partially loaded (missing={len(non_benign_missing)}, unexpected={len(unexpected)})"
-            )
-    else:
-        st.sidebar.warning("⚠️ No checkpoint found — using random weights")
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Checkpoint not found: {model_path}")
+
+    state_dict = torch.load(model_path, map_location=device)
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    non_benign_missing = [k for k in missing if k not in BENIGN_MISSING_SINC]
+    if non_benign_missing:
+        raise RuntimeError(
+            "Checkpoint/model mismatch: missing critical keys "
+            f"(count={len(non_benign_missing)}, sample={non_benign_missing[:3]})"
+        )
+    if unexpected:
+        st.sidebar.warning(
+            f"Checkpoint has unexpected keys (count={len(unexpected)}); proceeding with compatible weights."
+        )
+
+    st.sidebar.success("✅ Model loaded")
     model.eval()
     return model, device
 
@@ -75,25 +83,48 @@ model_path = st.sidebar.text_input("Model Path", default_model)
 config_path = st.sidebar.text_input("Config Path", default_config)
 threshold = st.sidebar.slider("Detection Threshold", 0.0, 1.0, 0.5, 0.01)
 
-model, device = load_model(model_path, config_path)
+try:
+    model, device = load_model(model_path, config_path)
+except Exception as e:
+    st.error(f"Model load failed: {e}")
+    st.stop()
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def pad_audio(x, max_len=MAX_LEN):
+    if len(x) == 0:
+        return np.zeros(max_len, dtype=np.float32)
     if len(x) >= max_len:
         return x[:max_len]
     repeats = int(max_len / len(x)) + 1
     return np.tile(x, repeats)[:max_len]
 
+def split_segments(waveform_np, max_len=MAX_LEN):
+    if len(waveform_np) <= max_len:
+        return [pad_audio(waveform_np, max_len)]
+    seg_count = max(1, int(len(waveform_np) / max_len))
+    segments = []
+    for i in range(seg_count):
+        seg = waveform_np[i * max_len: (i + 1) * max_len]
+        segments.append(pad_audio(seg, max_len))
+    return segments
+
 def run_inference(waveform_np, sr):
     if sr != SAMPLE_RATE:
         waveform_np = librosa.resample(waveform_np, orig_sr=sr, target_sr=SAMPLE_RATE)
-    waveform_np = pad_audio(waveform_np)
-    x = torch.tensor(waveform_np, dtype=torch.float32).unsqueeze(0).to(device)
+    segments = split_segments(waveform_np, MAX_LEN)
+    binary_probs, vocoder_probs = [], []
     with torch.no_grad():
-        out_binary, out_multi = model(x)
-    prob_fake = torch.exp(out_binary[0, 1]).item()
-    vocoder_probs = torch.exp(out_multi[0]).cpu().numpy()
-    return prob_fake, vocoder_probs
+        for seg in segments:
+            x = torch.tensor(seg, dtype=torch.float32).unsqueeze(0).to(device)
+            out_binary, out_multi = model(x)
+            binary_probs.append(torch.exp(out_binary[0]).cpu().numpy())
+            vocoder_probs.append(torch.exp(out_multi[0]).cpu().numpy())
+
+    avg_binary = np.mean(np.stack(binary_probs, axis=0), axis=0)
+    avg_vocoder = np.mean(np.stack(vocoder_probs, axis=0), axis=0)
+    prob_real = float(avg_binary[0])
+    prob_fake = float(avg_binary[1])
+    return prob_real, prob_fake, avg_vocoder
 
 VOCODER_NAMES = ["gt", "wavegrad", "diffwave", "parallel_wave_gan", "wavernn", "wavenet", "melgan"]
 
@@ -106,7 +137,18 @@ with tab1:
     if uploaded:
         st.audio(uploaded)
         uploaded.seek(0)
-        waveform_np, sr = librosa.load(io.BytesIO(uploaded.read()), sr=None, mono=True)
+        
+        # Save to a temporary file to prevent soundfile/librosa sync errors on BytesIO
+        file_ext = os.path.splitext(uploaded.name)[1]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
+            tmp.write(uploaded.read())
+            tmp_path = tmp.name
+        
+        try:
+            waveform_np, sr = librosa.load(tmp_path, sr=None, mono=True)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
         col1, col2 = st.columns(2)
         with col1:
@@ -126,20 +168,20 @@ with tab1:
             st.pyplot(fig); plt.close()
 
         with st.spinner("🔍 Analyzing..."):
-            prob_fake, vocoder_probs = run_inference(waveform_np, sr)
+            prob_real, prob_fake, vocoder_probs = run_inference(waveform_np, sr)
 
         st.divider()
         st.subheader("🛡️ Detection Result")
 
         c1, c2, c3 = st.columns(3)
         c1.metric("Fake Probability", f"{prob_fake:.1%}")
-        c2.metric("Real Probability", f"{1-prob_fake:.1%}")
+        c2.metric("Real Probability", f"{prob_real:.1%}")
         c3.metric("Threshold", f"{threshold:.2f}")
 
         if prob_fake > threshold:
             st.markdown(f'<p class="risk-high">🚨 DEEPFAKE DETECTED ({prob_fake:.1%})</p>', unsafe_allow_html=True)
         else:
-            st.markdown(f'<p class="risk-low">✅ LIKELY GENUINE ({1-prob_fake:.1%})</p>', unsafe_allow_html=True)
+            st.markdown(f'<p class="risk-low">✅ LIKELY GENUINE ({prob_real:.1%})</p>', unsafe_allow_html=True)
 
         st.markdown("**Vocoder Attribution (which synthesizer?)**")
         fig, ax = plt.subplots(figsize=(10, 3))

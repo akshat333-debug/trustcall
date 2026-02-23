@@ -36,8 +36,8 @@ def load_sample(sample_path, max_len=96000):
         return [Tensor(pad(y, max_len))]
 
     y_list = []
-    n_seg = int(np.ceil(len(y) / max_len))
-    for i in range(n_seg):
+    # Keep legacy segmentation behavior for compatibility with historical checkpoints.
+    for i in range(int(len(y) / max_len)):
         y_seg = y[i * max_len: (i + 1) * max_len]
         y_list.append(Tensor(pad(y_seg, max_len)))
     return y_list

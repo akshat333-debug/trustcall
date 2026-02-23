@@ -160,6 +160,8 @@ def main():
     parser.add_argument('--n_dev_real',  type=int,   default=None)
     parser.add_argument('--n_dev_fake',  type=int,   default=None)
     parser.add_argument('--seed',        type=int,   default=42)
+    parser.add_argument('--resume_from', type=str,   default=None,  help='Path to checkpoint to resume from')
+    parser.add_argument('--start_epoch', type=int,   default=1,     help='Epoch number to start/resume at')
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -178,6 +180,8 @@ def main():
     print(f"{'='*55}")
     print(f"  Device : {device}")
     print(f"  Epochs : {args.epochs}  |  Batch: {args.batch_size}  |  LR: {args.lr}")
+    if args.resume_from:
+        print(f"  Resuming from: {args.resume_from} at Epoch {args.start_epoch}")
 
     with open(args.config) as f:
         config = yaml.safe_load(f)
@@ -203,22 +207,31 @@ def main():
 
     model = RawNet(config['model'], device).to(device)
     
-    # Optional: Load best model checkpoint if it exists to resume
-    best_path = os.path.join(args.out_dir, 'best_model.pth')
-    if os.path.exists(best_path):
-        print(f"  Existing checkpoint found: {best_path} (Starting fresh to avoid overwriting unless intended, use carefully!)")
+    if args.resume_from and os.path.exists(args.resume_from):
+        try:
+            model.load_state_dict(torch.load(args.resume_from, map_location=device))
+            print(f"  Successfully loaded weights from {args.resume_from}!")
+        except Exception as e:
+            print(f"  Could not load checkpoint: {e}")
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    
+    # Fast-forward scheduler if resuming
+    if args.start_epoch > 1:
+        for _ in range(args.start_epoch - 1):
+            scheduler.step()
+
     criterion = nn.NLLLoss()
 
     os.makedirs(args.out_dir, exist_ok=True)
     best_eer  = float('inf')
+    best_path = os.path.join(args.out_dir, 'best_model.pth')
 
     print(f"\n  {'Epoch':>5}  {'Tr Loss':>8}  {'Tr Acc':>7}  {'Dv Loss':>8}  {'Dv Acc':>7}  {'EER':>6}")
     print(f"  {'-'*50}")
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(args.start_epoch, args.epochs + 1):
         tr_loss, tr_acc = train_epoch(model, tr_loader, optimizer, criterion, device)
         dv_loss, dv_acc, eer = eval_epoch(model, dv_loader, criterion, device)
         scheduler.step()
