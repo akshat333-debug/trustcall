@@ -16,7 +16,11 @@ import soundfile as sf
 import augment
 import whisper
 import requests
+import ssl
 from streamlit_lottie import st_lottie
+
+# Fix for macOS CERTIFICATE_VERIFY_FAILED when downloading whisper models
+ssl._create_default_https_context = ssl._create_unverified_context
 
 os.environ.setdefault("XDG_CACHE_HOME", os.path.join(tempfile.gettempdir(), "trustcall-cache"))
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "trustcall-mpl"))
