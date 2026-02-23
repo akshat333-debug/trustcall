@@ -16,9 +16,7 @@ import torch
 import yaml
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, PROJECT_ROOT)
-from model import RawNet
-from eval import load_model
+from model import RawNet, load_model
 
 SAMPLE_RATE = 24000
 AUDIO_LEN   = 96000   # 4 seconds

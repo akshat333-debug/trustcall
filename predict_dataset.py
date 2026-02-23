@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 from asvspoof_dataset import Dataset_ASVspoof2019
-from eval import load_model
+from model import load_model
 from main import Dataset_LibriSeVoc
 
 

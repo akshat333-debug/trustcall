@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from torch import Tensor
 import numpy as np
 import copy
+import yaml
+import os
 from collections import OrderedDict
 
 
@@ -454,3 +456,36 @@ class RawNet(nn.Module):
                 if summary[layer]["trainable"] == True:
                     trainable_params += summary[layer]["nb_params"]
             print_fn(line_new)
+
+BENIGN_MISSING_SINC = {
+    'Sinc_conv.low_hz_',
+    'Sinc_conv.band_hz_',
+    'Sinc_conv.window_',
+    'Sinc_conv.n_',
+}
+
+def load_model(model_path, config_path='model_config_RawNet.yaml', device='cpu'):
+    """Load RawNet model, gracefully handling missing or incompatible checkpoints."""
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    model = RawNet(config['model'], device)
+    model = model.to(device)
+    if model_path and os.path.exists(model_path):
+        try:
+            state_dict = torch.load(model_path, map_location=device)
+            missing, unexpected = model.load_state_dict(state_dict, strict=False)
+            print(f'Model loaded: {model_path}')
+            non_benign_missing = [k for k in missing if k not in BENIGN_MISSING_SINC]
+            if non_benign_missing:
+                print(f'  Missing keys: {len(non_benign_missing)} (e.g., {non_benign_missing[:3]})')
+            elif missing:
+                print('  Checkpoint compatibility: using initialized SincConv parameters.')
+            if unexpected:
+                print(f'  Unexpected keys: {len(unexpected)} (e.g., {unexpected[:3]})')
+        except RuntimeError as e:
+            print(f'WARNING: Could not load checkpoint (architecture mismatch): {e}')
+            print('  Using randomly initialized weights.')
+    else:
+        print(f'WARNING: Checkpoint not found at "{model_path}". Using random weights.')
+    model.eval()
+    return model
