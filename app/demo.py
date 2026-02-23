@@ -14,6 +14,9 @@ import io
 import tempfile
 import soundfile as sf
 import augment
+import whisper
+import requests
+from streamlit_lottie import st_lottie
 
 os.environ.setdefault("XDG_CACHE_HOME", os.path.join(tempfile.gettempdir(), "trustcall-cache"))
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(tempfile.gettempdir(), "trustcall-mpl"))
@@ -77,6 +80,21 @@ def load_model(model_path, config_path):
     model.eval()
     return model, device
 
+@st.cache_resource
+def load_whisper_model():
+    # Load Whisper "base" model for fast, accurate transcription
+    return whisper.load_model("base")
+
+@st.cache_data
+def load_lottieurl(url: str):
+    r = requests.get(url)
+    if r.status_code != 200:
+        return None
+    return r.json()
+
+# Load a futuristic audio scanning animation
+lottie_scanning = load_lottieurl("https://lottie.host/57fec960-e4b2-4d24-811c-c2b6d19ca7f0/I4FhM00QkZ.json")
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 st.sidebar.header("⚙️ Configuration")
 default_model = os.path.join(PROJECT_ROOT, "outputs", "best_model.pth")
@@ -139,10 +157,16 @@ def run_inference(waveform_np, sr):
 VOCODER_NAMES = ["gt", "wavegrad", "diffwave", "parallel_wave_gan", "wavernn", "wavenet", "melgan"]
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs(["🎵 Upload Audio", "� Explainability", "�📊 About"])
+tab1, tab2, tab3 = st.tabs(["🎵 Input Audio", "🔍 Explainability", "📊 About"])
 
 with tab1:
-    uploaded = st.file_uploader("Upload a WAV or FLAC file", type=["wav", "flac"])
+    audio_mode = st.radio("Select Input Method:", ["Upload Audio File", "🎤 Record Live Microphone"], horizontal=True)
+    
+    uploaded = None
+    if "Record" in audio_mode:
+        uploaded = st.audio_input("Record a voice message to test for Deepfake artifacts")
+    else:
+        uploaded = st.file_uploader("Upload a WAV or FLAC file", type=["wav", "flac"])
 
     if uploaded:
         st.markdown("**Original Audio**")
@@ -201,9 +225,32 @@ with tab1:
             ax.set_facecolor('#1e2130'); fig.patch.set_facecolor('#1e2130')
             st.pyplot(fig); plt.close()
 
-        with st.spinner("🔍 Analyzing..."):
+        st.divider()
+        st.subheader("🔍 Deep Neural Analysis")
+        
+        # Display Lottie Animation while analyzing
+        anim_col, text_col = st.columns([1, 4])
+        with anim_col:
+            if lottie_scanning:
+                st_lottie(lottie_scanning, height=100, key="scanning")
+        with text_col:
+            result_placeholder = st.empty()
+            with result_placeholder.container():
+                st.info("Extracting Whisper transcription & running SincConv Voice Activity neural detection...")
+            
+            # Step 1: Run Whisper
+            whisper_model = load_whisper_model()
+            transcription_result = whisper_model.transcribe(tmp_path)
+            transcription_text = transcription_result["text"].strip()
+            
+            # Step 2: Run RawNet Detection
             prob_real, prob_fake, vocoder_probs = run_inference(waveform_np, SAMPLE_RATE)
+            
+            result_placeholder.empty()
 
+        st.subheader("📝 Whisper Transcription")
+        st.markdown(f"> *\"{transcription_text}\"*")
+        
         st.divider()
         st.subheader("🛡️ Detection Result")
 
