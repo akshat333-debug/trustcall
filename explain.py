@@ -48,7 +48,7 @@ def load_audio(path):
     return pad_audio(y)
 
 
-def plot_sinc_filters(model, out_path, n_filters=20):
+def plot_sinc_filters(model, out_path=None, n_filters=20):
     """
     Visualize the learned SincConv bandpass filters in frequency domain.
     Shows which frequency bands the first layer is sensitive to.
@@ -93,9 +93,10 @@ def plot_sinc_filters(model, out_path, n_filters=20):
     ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(out_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"  Saved: {out_path}")
+    if out_path:
+        plt.savefig(out_path, dpi=150, bbox_inches='tight')
+        print(f"  Saved: {out_path}")
+    return fig
 
 
 def compute_input_gradient_saliency(model, device, audio_np):
@@ -116,7 +117,7 @@ def compute_input_gradient_saliency(model, device, audio_np):
     return saliency
 
 
-def plot_saliency(audio_np, saliency, out_path):
+def plot_saliency(audio_np, saliency, out_path=None):
     """Plot waveform with saliency overlay and mel spectrogram."""
     fig, axes = plt.subplots(3, 1, figsize=(14, 10))
     fig.suptitle('Input Saliency Analysis', fontsize=14, fontweight='bold')
@@ -154,9 +155,10 @@ def plot_saliency(audio_np, saliency, out_path):
     fig.colorbar(img, ax=ax, format='%+2.0f dB')
 
     plt.tight_layout()
-    plt.savefig(out_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"  Saved: {out_path}")
+    if out_path:
+        plt.savefig(out_path, dpi=150, bbox_inches='tight')
+        print(f"  Saved: {out_path}")
+    return fig
 
 
 def main():

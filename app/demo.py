@@ -129,7 +129,7 @@ def run_inference(waveform_np, sr):
 VOCODER_NAMES = ["gt", "wavegrad", "diffwave", "parallel_wave_gan", "wavernn", "wavenet", "melgan"]
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab1, tab2 = st.tabs(["🎵 Upload Audio", "📊 About"])
+tab1, tab2, tab3 = st.tabs(["🎵 Upload Audio", "� Explainability", "�📊 About"])
 
 with tab1:
     uploaded = st.file_uploader("Upload a WAV or FLAC file", type=["wav", "flac"])
@@ -146,6 +146,9 @@ with tab1:
         
         try:
             waveform_np, sr = librosa.load(tmp_path, sr=None, mono=True)
+            if sr != SAMPLE_RATE:
+                waveform_np = librosa.resample(waveform_np, orig_sr=sr, target_sr=SAMPLE_RATE)
+            waveform_np = pad_audio(waveform_np)
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
@@ -161,14 +164,14 @@ with tab1:
 
         with col2:
             st.markdown("**Mel Spectrogram**")
-            mel = librosa.feature.melspectrogram(y=waveform_np, sr=sr, n_mels=80)
+            mel = librosa.feature.melspectrogram(y=waveform_np, sr=SAMPLE_RATE, n_mels=80)
             fig, ax = plt.subplots(figsize=(8, 2))
             ax.imshow(np.log(mel + 1e-6), aspect='auto', origin='lower', cmap='magma')
             ax.set_facecolor('#1e2130'); fig.patch.set_facecolor('#1e2130')
             st.pyplot(fig); plt.close()
 
         with st.spinner("🔍 Analyzing..."):
-            prob_real, prob_fake, vocoder_probs = run_inference(waveform_np, sr)
+            prob_real, prob_fake, vocoder_probs = run_inference(waveform_np, SAMPLE_RATE)
 
         st.divider()
         st.subheader("🛡️ Detection Result")
@@ -196,6 +199,30 @@ with tab1:
         st.pyplot(fig); plt.close()
 
 with tab2:
+    st.markdown("## 🧠 Explainable AI (XAI) Analysis")
+    st.markdown("Understand *why* the model made its prediction by directly inspecting its learned frequency filters and temporal saliency map.")
+    
+    if uploaded:
+        from explain import plot_sinc_filters, compute_input_gradient_saliency, plot_saliency
+        
+        st.markdown("### 1. SincConv Learned Bandpass Filters")
+        st.markdown("These are the custom frequency bands the neural network actively learned to listen to, searching for hidden artifacts.")
+        with st.spinner("Visualizing filter bank..."):
+            fig_sinc = plot_sinc_filters(model, out_path=None, n_filters=20)
+            st.pyplot(fig_sinc)
+            plt.close(fig_sinc)
+            
+        st.markdown("### 2. Input Saliency Map (Gradient Analysis)")
+        st.markdown("Displays the exact milliseconds of audio that primarily triggered the model's detection. The higher the gradient, the more suspicious that frame is.")
+        with st.spinner("Computing backpropagation saliency gradients..."):
+            saliency = compute_input_gradient_saliency(model, device, waveform_np)
+            fig_sal = plot_saliency(waveform_np, saliency, out_path=None)
+            st.pyplot(fig_sal)
+            plt.close(fig_sal)
+    else:
+        st.info("Please upload an audio file in the first tab to generate explainability reports.")
+
+with tab3:
     st.markdown("""
     ## About TrustCall
 
