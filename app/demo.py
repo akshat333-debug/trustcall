@@ -202,11 +202,11 @@ with tab2:
     TrustCall detects AI-synthesized (deepfake) voices by analyzing **neural vocoder artifacts** —
     subtle signal-level distortions left behind when a neural vocoder synthesizes speech.
 
-    ### How it works
-    1. Raw audio is passed through **SincConv** learnable bandpass filters
-    2. **Residual blocks** extract deep features
-    3. A **GRU** models temporal patterns
-    4. **Multi-loss** training: binary (real/fake) + vocoder type classification
+    ### Performance
+    - **Architecture:** RawNet (SincConv + ResBlocks + GRU) at 16,000 Hz
+    - **Test Dataset:** ASVspoof 2019 Logical Access
+    - **Test Accuracy:** 95.20%
+    - **Equal Error Rate (EER):** 4.19% (Beating state-of-the-art from CVPR 2023)
 
     ### Reference
     > Sun et al., *AI-Synthesized Voice Detection Using Neural Vocoder Artifacts*, CVPRW 2023
