@@ -33,7 +33,7 @@ Raw Waveform → SincConv → ResBlocks (×6, w/ Attention) → GRU → FC → R
 
 | # | Feature | File | Description |
 |---|---------|------|-------------|
-| 1 | **Streamlit Demo App** | `app/demo.py` | Interactive web UI with waveform, spectrogram, and vocoder attribution chart |
+| 1 | **Streamlit Demo App** | `app/demo.py` | Interactive web UI with waveform, spectrogram, Live Microphone input, Whisper Transcription, Lottie animations, and vocoder attribution chart |
 | 2 | **Evaluation Plots** | `visualize.py` | Confusion matrix, ROC curve with EER, score distribution histogram |
 | 3 | **Package Setup** | `setup.py` | Installable Python package with CLI entry points |
 | 4 | **ASVspoof 2019 Loader** | `asvspoof_dataset.py` | Dataset loader for ASVspoof 2019 LA (protocol-aware, supports FLAC/WAV) |
@@ -79,8 +79,8 @@ python train_rawnet.py --data_path "data/ASVspoof 2019 Dataset 2/LA/LA" --out_di
 ## 🧪 Evaluation
 
 ```bash
-# Single file
-python eval.py --input_path sample.wav --model_path outputs/best_model.pth
+# Single file interactive evaluation (Best Method)
+streamlit run app/demo.py
 
 # Export dataset predictions (for visualization and metrics)
 python predict_dataset.py --dataset asvspoof \
@@ -117,7 +117,7 @@ streamlit run app/demo.py
 ## 🔍 Explainability
 
 ```bash
-# Visualize SincConv filters + saliency map
+# Visualize SincConv filters + saliency map independently
 python explain.py --audio sample.wav --model_path outputs/best_model.pth
 ```
 
