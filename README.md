@@ -1,8 +1,5 @@
 # 🛡️ TrustCall — Deepfake Voice Detection
 
-> **Course Project** — Implementation and extension of neural vocoder artifact-based deepfake audio detection.
-
----
 
 ## 📌 Overview
 
