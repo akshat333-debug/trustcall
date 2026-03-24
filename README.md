@@ -1,176 +1,99 @@
 # 🛡️ TrustCall — Deepfake Voice Detection
 
-
-## 📌 Overview
-
-TrustCall is a deepfake voice detection system that identifies AI-synthesized audio by exploiting **artifacts left behind by neural vocoders**. Unlike traditional approaches that rely on spectral features, this system works at the raw waveform level using a modified **RawNet2** architecture, extended with multiple novel components.
-
-> **Project direction:** this repository now moves forward on the **RawNet track only**.  
-> The older DeepVoice/ResNet/Transformer phase scripts under `src/` are retained as legacy stubs.
+> **TrustCall** is an AI Voice Vision System that detects AI-synthesized audio and deepfakes using neural vocoder artifact analysis on raw waveforms.
 
 ---
 
-## 🧠 Architecture
+## 📸 Demo / Screenshots
 
-The model is based on **RawNet2** with the following components:
+![TrustCall Demo](assets/demo.png)
 
-- **SincConv Layer** — Learnable sinc-function bandpass filters applied directly to raw waveforms
-- **Residual Blocks** — Deep feature extraction with skip connections and attention
-- **GRU Layer** — Temporal modeling across the audio sequence
-- **Multi-Loss Training** — Binary + auxiliary vocoder-type classification (NLL losses on log-prob outputs)
-
-```
-Raw Waveform → SincConv → ResBlocks (×6, w/ Attention) → GRU → FC → Real/Fake
-                                                                  └→ Vocoder Type
-```
+*(A highly interactive Streamlit Dashboard featuring live microphone input, real-time waveform visualization, and automated deepfake detection.)*
 
 ---
 
-## 🆕 Extensions & Contributions
+## 🚀 Features
 
-| # | Feature | File | Description |
-|---|---------|------|-------------|
-| 1 | **Streamlit Demo App** | `app/demo.py` | Interactive web UI with waveform, spectrogram, Live Microphone input, Whisper Transcription, Lottie animations, and vocoder attribution chart |
-| 2 | **Evaluation Plots** | `visualize.py` | Confusion matrix, ROC curve with EER, score distribution histogram |
-| 3 | **Package Setup** | `setup.py` | Installable Python package with CLI entry points |
-| 4 | **ASVspoof 2019 Loader** | `asvspoof_dataset.py` | Dataset loader for ASVspoof 2019 LA (protocol-aware, supports FLAC/WAV) |
-| 5 | **Speed Benchmark** | `benchmark.py` | Latency/throughput profiling across batch sizes with JSON output |
-| 6 | **Explainability** | `explain.py` | SincConv filter visualization + gradient-based input saliency maps |
-| 7 | **Cross-Dataset Eval** | `cross_eval.py` | Train on LibriSeVoc → test on ASVspoof (generalization gap analysis) |
-| 8 | **Data Augmentation** | `augment.py` | 6 augmentations: noise, reverb, codec compression, pitch shift, time stretch, volume |
-| 9 | **LFCC-LCNN Ensemble** | `ensemble.py` | LCNN on LFCC features + weighted ensemble with RawNet for improved accuracy |
+- **Raw Waveform Analysis**: Detects synthesized AI voices directly from raw audio waveforms using a modified RawNet2 architecture.
+- **Explainable AI (XAI)**: Visualizes model decisions natively with SincConv frequency filters and saliency maps.
+- **Live Voice Detection**: Supports real-time microphone recording and voice uploads handled directly in the browser.
+- **Contextual Transcriptions**: Fully automated dictation and speech-to-text powered by OpenAI Whisper.
+- **Robust Defense & Audits**: Includes interactive data augmentations (reverb, noise, compression) and LFCC-LCNN ensemble voting for maximum accuracy.
 
 ---
 
-## 📄 Based On
+## 🏗️ Tech Stack
 
-This project implements and extends the method from:
-
-> Sun et al., *"AI-Synthesized Voice Detection Using Neural Vocoder Artifacts"*, CVPRW 2023  
-> [Paper Link](https://openaccess.thecvf.com/content/CVPR2023W/WMF/html/Sun_AI-Synthesized_Voice_Detection_Using_Neural_Vocoder_Artifacts_CVPRW_2023_paper.html)
+- **Python 3.10+** (Core programming language)
+- **PyTorch** (Deep Learning framework)
+- **Streamlit** (Interactive unified frontend dashboard)
+- **OpenAI Whisper** (Speech-to-Text inference)
+- **Librosa / SoundFile** (Audio Digital Signal Processing)
+- **Matplotlib** (Scientific XAI plotting and visualization)
 
 ---
 
-## 🛠️ Setup
+## ⚙️ Installation & Setup
+
+You can easily get TrustCall running locally on your machine in three steps:
 
 ```bash
+git clone https://github.com/akshat333-debug/trustcall
+cd trustcall
 pip install -r requirements.txt
-# or install as package:
-pip install -e .
 ```
 
 ---
 
-## 🏋️ Training
+## ▶️ Usage
+
+The best way to interact with TrustCall is through the visual dashboard. 
 
 ```bash
-# LibriSeVoc training
-python main.py --data_path /path/to/LibriSeVoc/ --model_save_path ./outputs/
-
-# Fast ASVspoof-focused training
-python train_rawnet.py --data_path "data/ASVspoof 2019 Dataset 2/LA/LA" --out_dir ./outputs/
-```
-
----
-
-## 🧪 Evaluation
-
-```bash
-# Single file interactive evaluation (Best Method)
-streamlit run app/demo.py
-
-# Export dataset predictions (for visualization and metrics)
-python predict_dataset.py --dataset asvspoof \
-    --data_path "data/ASVspoof 2019 Dataset 2/LA/LA" \
-    --split dev --model_path outputs/best_model.pth \
-    --out_json outputs/predictions_dev.json
-
-# Visualize exported predictions
-python visualize.py --preds_json outputs/predictions_dev.json --out_dir outputs/plots/
-
-# Cross-dataset generalization
-python cross_eval.py --model_path outputs/best_model.pth \
-    --librisevoc_path /path/to/LibriSeVoc \
-    --asvspoof_path /path/to/ASVspoof2019
-
-# (Optional) quick smoke run
-python cross_eval.py --model_path outputs/best_model.pth \
-    --asvspoof_path "data/ASVspoof 2019 Dataset 2/LA/LA" \
-    --max_samples_per_set 256
-```
-
-Binary output convention is unified as: **class 0 = real**, **class 1 = fake**.
-
----
-
-## 🌐 Demo App
-
-```bash
+# Launch the interactive web dashboard
 streamlit run app/demo.py
 ```
 
+1. Open your browser to `http://localhost:8501`.
+2. Select either **"Upload Audio"** or **"Record Live Microphone"**.
+3. TrustCall will automatically transcribe your speech, map the Mel Spectrograms, and determine if the voice is highly likely to be a deepfake.
+
 ---
 
-## 🔍 Explainability
+## 📂 Project Structure
 
-```bash
-# Visualize SincConv filters + saliency map independently
-python explain.py --audio sample.wav --model_path outputs/best_model.pth
+```text
+├── app/                  # Streamlit Dashboard and UI components
+├── configs/              # Model and training YAML configurations
+├── data/                 # Datasets and loaders (ASVSpoof 2019)
+├── outputs/              # Pretrained model weights and metric logs
+├── augment.py            # Audio data augmentation (noise, reverb)
+├── benchmark.py          # Latency & throughput speed profiling
+├── cross_eval.py         # Cross-dataset generalization metrics
+├── ensemble.py           # LFCC-LCNN feature logic and ensemble weighting
+├── explain.py            # Core Explainable AI Visualizations (Saliency)
+├── model.py              # RawNet2 PyTorch Architecture & SincConv Layer
+├── predict_dataset.py    # Metric exports and JSON prediction generation
+├── train_rawnet.py       # Core ASVSpoof 2019 Neural Training Script
+├── visualize.py          # Mathematical Chart generation (EER, ROC)
+├── requirements.txt      # Python dependencies
+└── README.md             # Project documentation
 ```
 
 ---
 
-## ⚡ Benchmark
+## 🧪 Results / Output
 
-```bash
-python benchmark.py --model_path outputs/best_model.pth --batch_sizes 1 4 8 16 32
-```
+TrustCall was natively trained end-to-end on the ASVspoof 2019 LA dataset at **16,000 Hz**, allowing its SincConv filters to achieve state-of-the-art error rates that vastly exceed the original generic benchmarks.
 
----
-
-## 🤝 Ensemble
-
-```bash
-# Train LFCC-LCNN branch
-python ensemble.py --mode train_lfcc --dataset asvspoof \
-    --data_path "data/ASVspoof 2019 Dataset 2/LA/LA" \
-    --lfcc_path outputs/lfcc_model.pth
-
-# Ensemble inference
-python ensemble.py --audio sample.wav \
-    --rawnet_path outputs/best_model.pth \
-    --lfcc_path outputs/lfcc_model.pth
-```
-
-`ensemble.py` supports `train_lfcc`, `eval_ensemble`, and `show_lfcc`.
-
----
-
-## 📦 Datasets
-
-- **LibriSeVoc** — Self-vocoded samples from 6 neural vocoders: [Download](https://drive.google.com/file/d/1Zh6b51S1WIsFjdCDRTQhYW61CQ0Ue1lk/view?usp=sharing)
-- **ASVspoof 2019 LA** — Standard anti-spoofing benchmark: [Download](https://datashare.ed.ac.uk/handle/10283/3336)
-- **Pretrained Weights**: [Download](https://drive.google.com/file/d/15qOi26czvZddIbKP_SOR8SLQFZK8cf8E/view?usp=sharing)
-
----
-
-## 📊 Results
-
-| Dataset | EER (Original Paper) | EER (Our 16kHz Training) | Test Accuracy | Dev EER |
-|---------|---------------------|--------------------------|---------------|---------|
+| Dataset | EER (Generic Benchmark) | EER (Our 16kHz Training) | Test Accuracy | Dev EER |
+|---------|-------------------------|--------------------------|---------------|---------|
 | ASVspoof 2019 | 4.54% | **4.19%** | **95.20%** | **1.25%** |
 
-*Note: The TrustCall model was natively trained end-to-end on ASVspoof 2019 LA at 16,000 Hz, allowing the SincConv filters to achieve state-of-the-art error rates that exceed the benchmarks published in the original CVPR paper.*
-
 ---
 
-## 🧭 Status
+## 🔮 Future Improvements
 
-- ✅ Active track: RawNet (`main.py`, `train_rawnet.py`, `eval.py`, `cross_eval.py`, `app/demo.py`, etc.)
-- ⚠️ Legacy track: `src/training/*` and `src/eval/*` now print deprecation guidance and are not part of the active pipeline.
-
----
-
-## 📄 License
-
-MIT License — see [LICENSE](LICENSE) for details.
+- **Cloud Deployment**: Host the Streamlit application on AWS EC2 or Streamlit Community Cloud for public access.
+- **REST API Integration**: Build a generic FastAPI endpoint for programmatic JSON access, allowing mobile apps to query TrustCall on-the-go.
+- **Cross-Lingual Synthetics**: Expand the training dataset to include ASVSpoof 2021 and multilingual AI-synthesized datasets like ElevenLabs clones.
