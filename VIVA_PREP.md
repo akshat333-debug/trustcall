@@ -302,3 +302,211 @@ A: In recurrent networks (GRU) processing long sequences, gradients can multiply
 
 **Q: Could you have used a Transformer instead of GRU?**  
 A: A Transformer would require significantly more training data and compute due to the quadratic attention complexity across the sequence length. With 25k training samples and a local 8GB machine, GRU is the practical choice. Transformers typically outperform GRUs only after hundreds of thousands of examples.
+
+---
+
+## 13. 🖥️ How the Streamlit App Works — End-to-End Flow
+
+### Step-by-Step Pipeline (What happens when you submit audio)
+
+```
+User inputs audio (Upload or Microphone)
+         ↓
+Step 1: Audio saved to a temporary file on disk
+         ↓
+Step 2: librosa.load() → decodes FLAC/WAV → float32 numpy array
+         ↓
+Step 3: Resample to 16,000 Hz (if needed)
+         ↓
+Step 4: Optional augmentations applied (noise, reverb, codec, pitch)
+         ↓
+Step 5: pad_audio() → clips padded/trimmed to exactly 64,000 samples (4 seconds)
+         ↓
+Step 6: Whisper transcribes the audio to text (speech-to-text)
+         ↓
+Step 7: RawNet model runs inference → outputs prob_real, prob_fake, vocoder_probs[7]
+         ↓
+Step 8: UI renders: Waveform, Mel Spectrogram, Transcription, Decision, Vocoder Chart
+         ↓
+Step 9: Temporary audio file deleted from disk (cleanup)
+```
+
+---
+
+### Tab 1 — 🎵 Input Audio
+
+#### Input Methods
+| Option | What it Does |
+|--------|-------------|
+| **Upload Audio File** | Accepts `.wav` or `.flac` files from your computer. Maximum recommended length: 10 seconds |
+| **🎤 Record Live Microphone** | Opens the browser's native mic — uses `st.audio_input()` which returns a BytesIO WAV in standard 44.1kHz stereo, auto-converted to 16kHz mono before inference |
+
+#### Robustness Testing Sidebar Checkboxes
+These are optional augmentations applied *before* inference to test model strength:
+- **Add Background Noise**: Adds white/gaussian noise at a fixed SNR
+- **Add Room Reverb**: Convolves audio with a simulated Room Impulse Response (RIR)
+- **Simulate Codec Compression**: Applies lossy MP3 encoding at low bitrate, then decodes
+- **Apply Pitch Shift**: Shifts voice pitch up or down by a semitone
+
+When any augmentation is checked, a **"Corrupted Audio"** player appears so you can hear what the model actually received.
+
+---
+
+### Graph 1 — Waveform (Left Column, Dark Blue Line Plot)
+
+```
+Color: #4c8bf5 (cornflower blue)
+Background: #1e2130 (dark navy)
+X-axis: Sample index (0 → 64,000 samples = 4 seconds)
+Y-axis: Amplitude (-1.0 to +1.0, normalized float)
+```
+
+**What to read from it:**
+- **Height/amplitude** shows how loud the audio is at each moment
+- **Dense oscillations** = sustained voiced sounds (vowels, hum)
+- **Flat/silent regions** = pauses between words or background silence
+- **Clipping** (amplitude hitting ±1.0) = over-amplified or distorted audio
+- **Irregular envelope** compared to typical speech = potential synthesis artifact
+
+**Why it matters for deepfake detection:** Neural vocoders often produce slightly *too-regular* amplitude envelopes without the natural micro-variations of real human breath and vocal tract dynamics.
+
+---
+
+### Graph 2 — Mel Spectrogram (Right Column, Magma Heatmap)
+
+```
+Color map: 'magma' (dark purple → orange → yellow = low → mid → high energy)
+Background: #1e2130 (dark navy)
+X-axis: Time frames (left = beginning, right = end of audio)
+Y-axis: Mel frequency bands (bottom = low frequencies ~80Hz, top = high frequencies ~8kHz)
+Color scale: log(mel_energy + 1e-6) — prevents log(0) errors; logarithmic energy scale
+```
+
+**What colors mean:**
+| Color | Meaning |
+|-------|---------|
+| **Black / Deep Purple** | Very low energy — silence or no harmonic content at that frequency and time |
+| **Dark Red / Maroon** | Low-moderate energy — background noise or soft consonants |
+| **Orange** | Moderate-high energy — fundamental frequency harmonics of the voice |
+| **Bright Yellow / White** | Very high energy — strong harmonic peaks or formants (vowels, sustained notes) |
+
+**What to read from it:**
+- **Horizontal yellow-orange bands** = harmonics of the voice (regular spacing = healthy human voice)
+- **Irregular or missing harmonics** in the upper Mel bands = possible vocoder artifact
+- Neural vocoders like WaveNet or WaveGlow tend to produce slightly blurred or over-smoothed spectrograms in the 2–6kHz region
+- **Formants** (dark bands between vowel harmonics) represent resonance of the vocal tract — their precise shape is hard to fake perfectly
+
+---
+
+### Metric Cards — 🛡️ Detection Result
+
+Three side-by-side Streamlit metric boxes appear:
+
+| Card | What it shows | Formula |
+|------|---------------|---------|
+| **Fake Probability** | Probability the model assigns that this audio is AI-synthesized | `prob_fake = exp(log_softmax_output[1])` |
+| **Real Probability** | Probability the model assigns that this audio is genuine human speech | `prob_real = exp(log_softmax_output[0])` |
+| **Threshold** | The user-configurable decision boundary (default: 0.50) | Set in sidebar slider |
+
+> **Note:** `prob_real + prob_fake = 1.0` always — they come from a softmax distribution.
+
+**How the final verdict is decided:**
+```python
+if prob_fake > threshold:
+    → 🚨 DEEPFAKE DETECTED (shown in RED #ff4b4b)
+else:
+    → ✅ LIKELY GENUINE (shown in GREEN #21c354)
+```
+
+**What threshold means:** If threshold = 0.50, the model must be more than 50% confident it's fake to trigger the DEEPFAKE alarm. Lowering the threshold (e.g. 0.30) makes the system more aggressive/sensitive — it flags more audio as suspicious. Raising it (e.g. 0.70) makes it more lenient — only very obvious deepfakes are flagged.
+
+---
+
+### Graph 3 — Vocoder Attribution Bar Chart
+
+```
+X-axis: 7 vocoder names [gt, wavegrad, diffwave, parallel_wave_gan, wavernn, wavenet, melgan]
+Y-axis: Probability (0.0 → 1.0)
+Colors: 
+    gt (ground truth/REAL) bar → GREEN (#21c354)
+    All other bars (synthetic vocoders) → RED (#ff4b4b)
+Number labels: Displayed above each bar, rounded to 2 decimal places
+Background: #1e2130 (dark navy)
+```
+
+**What each bar represents:**
+| Name | What it is |
+|------|-----------|
+| **gt** | Ground truth — this is the probability the model assigns to the audio being *genuine human speech* (class 0) |
+| **wavegrad** | WaveGrad — a score-based diffusion neural vocoder |
+| **diffwave** | DiffWave — another diffusion-based neural speech synthesizer |
+| **parallel_wave_gan** | Parallel WaveGAN — adversarial GAN-based waveform synthesizer |
+| **wavernn** | WaveRNN — recurrent neural network autoregressive vocoder |
+| **wavenet** | WaveNet — DeepMind's original autoregressive vocoder (the most famous one) |
+| **melgan** | MelGAN — fast GAN-based spectrogram-to-waveform vocoder |
+
+**How to interpret the chart:**
+- If the **green `gt` bar** is tallest → model believes the voice is human and genuine
+- If any **red bar** is tallest → model believes that specific vocoder system was used to generate the audio
+- Multiple tall red bars = the model is uncertain *which* synthesizer, but is confident it's not human
+- This is the **forensic fingerprint** — it tells you not just that audio is fake, but *how* it was faked
+
+---
+
+### Tab 2 — 🔍 Explainability
+
+#### Graph 4 — SincConv Learned Bandpass Filters
+
+```
+X-axis: Frequency (Hz) — from 0 Hz to Nyquist (8,000 Hz at 16kHz sampling)
+Y-axis: Filter magnitude response (linear scale, 0 to 1)
+Each line: One of the 20 learned sinc bandpass filters
+```
+
+**What to read:**
+- Each curve shows which frequency range that filter is *tuned to listen to*
+- If multiple filters cluster around 3–6 kHz → the model has learned that deepfake artifacts appear in that range
+- Filters trained from scratch started at Mel-scaled initialization but shifted during training to cover artifact-rich frequencies specific to the training data
+- These filters are **interpretable** unlike CNN weights — each one is a physical frequency band
+
+#### Graph 5 — Input Saliency Map
+
+```
+Top half: Blue waveform (actual audio signal)
+Bottom half: Orange saliency signal (gradient magnitude over time)
+X-axis: Time (left = start of clip, right = end of 4 seconds)
+Y-axis (top): Amplitude of waveform
+Y-axis (bottom): Saliency value |d(prob_fake)/d(waveform_sample)|
+```
+
+**What to read:**
+- **Tall orange peaks** at a time position = the model considers *that exact moment* in the audio most suspicious for being fake
+- **Flat orange regions** = those moments are ignored by the model (irrelevant to its decision)
+- Typically, saliency peaks align with **voiced phonemes** (vowels) — this is where vocoder artifacts are most pronounced because the vocoder must actively synthesize the harmonic oscillations
+- Silent pauses show near-zero saliency because vocoders don't need to synthesize silence precisely
+
+---
+
+### Tab 3 — 📊 About
+
+This tab displays:
+- Project performance summary table
+- The Cross-Dataset Generalization chart (if `cross_eval.py` was run)
+- The academic paper reference
+
+**Cross-Eval Chart (if visible):**
+- Shows a confusion matrix or ROC curve from testing the model trained on LibriSeVoc against the ASVspoof 2019 dataset
+- This measures how well the model **generalizes** — can it detect deepfakes from vocoders it was never explicitly trained on?
+
+---
+
+### Complete Color Legend
+
+| Color | Hex Code | Used For |
+|-------|----------|----------|
+| 🟦 Cornflower Blue | `#4c8bf5` | Waveform line (the audio time series) |
+| 🟨 Magma gradient | `cmap='magma'` | Mel Spectrogram heatmap (energy intensity) |
+| 🟩 Green | `#21c354` | GENUINE verdict text, `gt` (real) bar in vocoder chart |
+| 🟥 Red | `#ff4b4b` | DEEPFAKE verdict text, synthetic vocoder bars |
+| 🔵 Dark Navy | `#1e2130` | All graph background panels |
+| ⬛ Dark Gray | `#444444` | Axis spine borders on all graphs |
