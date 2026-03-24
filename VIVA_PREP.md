@@ -509,4 +509,99 @@ This tab displays:
 | 🟩 Green | `#21c354` | GENUINE verdict text, `gt` (real) bar in vocoder chart |
 | 🟥 Red | `#ff4b4b` | DEEPFAKE verdict text, synthetic vocoder bars |
 | 🔵 Dark Navy | `#1e2130` | All graph background panels |
+| 🔵 Dark Navy | `#1e2130` | All graph background panels |
 | ⬛ Dark Gray | `#444444` | Axis spine borders on all graphs |
+
+---
+
+## 14. ⚖️ How the Final Verdict is Decided (Step-by-Step)
+
+This is one of the most important things to understand clearly — the verdict mechanism is more nuanced than just "model says fake."
+
+### Step 1 — Raw Model Output (Log-Probabilities)
+
+The RawNet model produces **log-softmax** outputs from its binary head:
+
+```python
+out_binary = model(x)   # shape: [1, 2]
+# out_binary[0] = log(P_real)
+# out_binary[1] = log(P_fake)
+```
+
+These are negative numbers (since log of a probability ≤ 1 is always ≤ 0). They are mathematically guaranteed to sum to log(1) = 0 when exponentiated.
+
+### Step 2 — Convert to Probabilities
+
+```python
+probs = torch.exp(out_binary)
+prob_real = float(probs[0])   # class 0 = genuine (bonafide)
+prob_fake = float(probs[1])   # class 1 = synthesized (spoof)
+```
+
+This gives two values that **always sum to exactly 1.0**:
+
+```
+prob_real + prob_fake = 1.0   (guaranteed by softmax)
+```
+
+For example:
+- `prob_real = 0.82, prob_fake = 0.18` → 82% confident it's real
+- `prob_real = 0.03, prob_fake = 0.97` → 97% confident it's fake
+
+### Step 3 — Apply the Threshold
+
+The user sets a **detection threshold** via the sidebar slider (default = `0.50`):
+
+```python
+if prob_fake > threshold:
+    verdict = "🚨 DEEPFAKE DETECTED"   # shown in RED
+else:
+    verdict = "✅ LIKELY GENUINE"       # shown in GREEN
+```
+
+The threshold is the dividing line — think of it as "how suspicious does the model need to be before it raises the alarm?"
+
+| Threshold | Behaviour |
+|-----------|-----------|
+| `0.30` | Aggressive — flags audio with just 30% fake probability. Fewer false negatives, more false positives |
+| `0.50` (default) | Balanced — equal treatment of real and fake errors |
+| `0.70` | Conservative — only raises alarm if model is 70%+ confident it's fake. Fewer false positives, more false negatives |
+
+### Step 4 — What Does the Model Actually Look At?
+
+The model does not look at any transcription, volume, language, or speaker identity. It operates purely on:
+
+1. **SincConv frequency band activations** — which frequency ranges have suspicious energy patterns
+2. **Residual block feature maps** — high-level abstract patterns found from combining those frequency bands
+3. **GRU temporal sequence** — how those patterns evolve across the 4-second window
+
+In simple terms: **the model is listening for the signature sound imperfections that neural vocoders leave behind** — like how a photocopied document has subtle artifacts that reveal it's not original.
+
+### Step 5 — Why the Vocoder Chart Does NOT Override the Verdict
+
+This is a critical distinction:
+
+```
+Binary Head (2 classes) ──► prob_real vs prob_fake ──► OFFICIAL VERDICT
+                                                          ↑
+                                                   This is what matters
+
+Vocoder Head (7 classes) ──► [gt, wavegrad, ..., melgan] ──► FORENSIC INFO ONLY
+                                                               ↑
+                                               Tells you HOW it's fake, not WHETHER
+```
+
+The two heads are trained with **independent loss functions** and produce **independent softmax distributions**. They can and do disagree in edge cases:
+
+| Binary Head | Vocoder Chart | What it means |
+|-------------|--------------|---------------|
+| `prob_real = 1.00` | `gt` bar is tallest (green) | ✅ Fully confirmed genuine |
+| `prob_fake = 1.00` | One red bar dominates | 🚨 Fake detected, synthesizer identified |
+| `prob_real = 1.00` | Multiple red bars tallest | ✅ Still GENUINE — vocoder head is uncertain because real audio with recording artifacts doesn't match its "gt" training template cleanly. Binary verdict overrides. |
+| `prob_fake = 0.97` | `gt` bar is tallest | 🚨 Still DEEPFAKE — vocoder head confused but binary head has high confidence. Binary verdict overrides. |
+
+> **Rule: The binary head's `prob_fake > threshold` comparison is the one and only basis for the final GENUINE / DEEPFAKE verdict. The vocoder chart is supplementary forensic evidence only.**
+
+### Summary — One-Liner for the Viva
+
+> "The model converts raw audio to a 64,000-sample waveform, passes it through SincConv bandpass filters and residual blocks, feeds the resulting feature sequence into a 3-layer GRU, and produces a log-softmax binary probability. If the exponentiated fake-class probability exceeds the user's threshold (default 0.5), the audio is flagged as a deepfake."
