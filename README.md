@@ -1,6 +1,25 @@
 # 🛡️ TrustCall — Deepfake Voice Detection
 
-> **TrustCall** is an AI Voice Vision System that detects AI-synthesized audio and deepfakes using neural vocoder artifact analysis on raw waveforms.
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
+![AI Safety](https://img.shields.io/badge/Open%20Source-AI%20Safety-green.svg)
+
+TrustCall is an open-source AI system designed to detect synthetic and deepfake audio, addressing the growing risk of voice-based impersonation and fraud.
+
+As generative voice models become more accessible, verifying the authenticity of audio is becoming a critical problem in security, media, and communication systems. TrustCall provides a reproducible and explainable pipeline for detecting AI-generated speech using raw waveform analysis and interpretable deep learning.
+
+---
+
+## 🌍 Why This Matters
+
+AI-generated voice is increasingly used in scams, misinformation, and identity impersonation. Current detection systems are often opaque, difficult to reproduce, or not accessible to developers.
+
+TrustCall aims to:
+- Provide an open and transparent deepfake detection pipeline
+- Enable developers to integrate voice authenticity checks into applications
+- Advance research in explainable audio forensics
+
+This project is part of a broader effort toward building trustworthy AI systems.
 
 ---
 
@@ -84,7 +103,7 @@ streamlit run app/demo.py
 
 ## 🧪 Results / Output
 
-TrustCall was natively trained end-to-end on the ASVspoof 2019 LA dataset at **16,000 Hz**, allowing its SincConv filters to achieve state-of-the-art error rates that vastly exceed the original generic benchmarks.
+TrustCall was natively trained end-to-end on the ASVspoof 2019 LA dataset at **16,000 Hz**, allowing its SincConv filters to achieve competitive performance compared to baseline benchmarks on ASVspoof 2019.
 
 | Dataset | EER (Generic Benchmark) | EER (Our 16kHz Training) | Test Accuracy | Dev EER |
 |---------|-------------------------|--------------------------|---------------|---------|
