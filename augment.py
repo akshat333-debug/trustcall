@@ -26,7 +26,7 @@ def add_gaussian_noise(x, snr_db_range=(10, 40)):
     return (x + noise).astype(np.float32)
 
 
-def apply_room_reverb(x, sample_rate=24000, room_scale_range=(0.1, 0.9)):
+def apply_room_reverb(x, sample_rate=16000, room_scale_range=(0.1, 0.9)):
     """
     Simulate room reverb using a simple exponential decay impulse response.
     Avoids heavy dependency on pyroomacoustics.
@@ -41,7 +41,7 @@ def apply_room_reverb(x, sample_rate=24000, room_scale_range=(0.1, 0.9)):
     return reverbed.astype(np.float32)
 
 
-def apply_codec_compression(x, sample_rate=24000, bitrate_kbps_range=(8, 32)):
+def apply_codec_compression(x, sample_rate=16000, bitrate_kbps_range=(8, 32)):
     """
     Simulate codec compression artifacts by quantizing the signal.
     Approximates the distortion of low-bitrate codecs (MP3, AAC, etc.)
@@ -53,7 +53,7 @@ def apply_codec_compression(x, sample_rate=24000, bitrate_kbps_range=(8, 32)):
     return quantized.astype(np.float32)
 
 
-def apply_pitch_shift(x, sample_rate=24000, semitones_range=(-2, 2)):
+def apply_pitch_shift(x, sample_rate=16000, semitones_range=(-2, 2)):
     """
     Approximate pitch shift via resampling (no librosa dependency at runtime).
     Shifts pitch by resampling then trimming/padding.
@@ -113,7 +113,7 @@ class AugmentedDataset(Dataset):
         aug_names:     List of augmentation names to use (default: all)
     """
 
-    def __init__(self, base_dataset, p=0.5, sample_rate=24000, aug_names=None):
+    def __init__(self, base_dataset, p=0.5, sample_rate=16000, aug_names=None):
         self.base_dataset = base_dataset
         self.p = p
         self.sample_rate = sample_rate
@@ -175,8 +175,8 @@ if __name__ == '__main__':
     import os
     os.makedirs(args.out_dir, exist_ok=True)
 
-    y, sr = librosa.load(args.audio, sr=24000, mono=True)
-    y = y[:96000]  # 4 seconds
+    y, sr = librosa.load(args.audio, sr=16000, mono=True)
+    y = y[:64000]  # 4 seconds at 16kHz
 
     print(f"Testing augmentations on: {args.audio}")
     for name, fn in AUGMENTATIONS:

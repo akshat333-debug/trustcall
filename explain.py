@@ -30,8 +30,8 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 from model import RawNet
 
-SAMPLE_RATE = 24000
-MAX_LEN     = 96000
+SAMPLE_RATE = 16000
+MAX_LEN     = 64000
 BENIGN_MISSING_SINC = {'Sinc_conv.low_hz_', 'Sinc_conv.band_hz_', 'Sinc_conv.window_', 'Sinc_conv.n_'}
 
 

@@ -1,4 +1,4 @@
-# 🎓 TrustCall — Technical Deep Dive (Viva Preparation)
+# 🎓 TrustCall — Technical Deep Dive
 
 > This document is written to explain **every technical decision** made in the TrustCall project — what was used, why it was chosen, and why all popular alternatives were not selected. This is intended for a Soft Computing examination context.
 

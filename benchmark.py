@@ -18,8 +18,8 @@ import yaml
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 from model import RawNet, load_model
 
-SAMPLE_RATE = 24000
-AUDIO_LEN   = 96000   # 4 seconds
+SAMPLE_RATE = 16000
+AUDIO_LEN   = 64000   # 4 seconds at 16kHz
 
 
 def benchmark_model(model, device, batch_sizes, n_runs=50, warmup=10):

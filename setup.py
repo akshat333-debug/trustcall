@@ -32,6 +32,9 @@ setup(
         'tqdm>=4.64.0',
         'streamlit>=1.20.0',
         'soundfile>=0.11.0',
+        'openai-whisper>=20230314',
+        'streamlit-lottie>=0.0.5',
+        'requests>=2.28.0',
     ],
     entry_points={
         'console_scripts': [

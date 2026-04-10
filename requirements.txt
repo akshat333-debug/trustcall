@@ -17,3 +17,6 @@ matplotlib>=3.5.0
 
 # Demo App
 streamlit>=1.20.0
+openai-whisper>=20230314
+streamlit-lottie>=0.0.5
+requests>=2.28.0
