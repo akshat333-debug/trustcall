@@ -29,6 +29,8 @@ This project is part of a broader effort toward building trustworthy AI systems.
 
 *(A highly interactive Streamlit Dashboard featuring live microphone input, real-time waveform visualization, and automated deepfake detection.)*
 
+<!-- GIF UPGRADE: record ~10s (upload/record clip → waveform → REAL/FAKE verdict + explainability heatmap), save as assets/demo.gif, then swap the line above to: ![TrustCall Demo](assets/demo.gif) — a moving demo of the explainability heatmap is the single strongest trust signal here. -->>
+
 ---
 
 ## 🚀 Features
